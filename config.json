@@ -1,0 +1,13 @@
+{
+    "modification_weights": {
+        "Numeric": 1.0,
+        "Symbol": 0.9379821382462978,
+        "Capitalization": 0.8514155149459839,
+        "Leet": 0.9379821382462978,
+        "Shift": 1.0,
+        "Repetition": 1.0488462261855602
+    },
+    "chain_depth": 2,
+    "threshold": 0.5,
+    "max_length": 20
+}
