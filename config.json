@@ -1,13 +1,18 @@
 {
     "modification_weights": {
-        "Numeric": 1.0,
-        "Symbol": 0.9379821382462978,
-        "Capitalization": 0.8514155149459839,
-        "Leet": 0.9379821382462978,
-        "Shift": 1.0,
-        "Repetition": 1.0488462261855602
+        "Numeric": 6.288432876467796,
+        "Symbol": 9.28119394034229,
+        "Capitalization": 41.29739275388104,
+        "Leet": 17.212540816777867,
+        "Shift": 0.0,
+        "Repetition": 0.0
     },
     "chain_depth": 2,
     "threshold": 0.5,
-    "max_length": 20
+    "max_length": 20,
+    "last_optimization": {
+        "timestamp": "2025-02-23 20:20:31",
+        "hidden_dim": 256,
+        "dropout": 0.12226082482926127
+    }
 }

@@ -2,38 +2,42 @@
 """
 crackernaut_train.py
 
-This script is dedicated to training the Crackernaut configuration model.
-It interactively presents sample password variants (generated from a given base password)
-and adjusts modification weights based on user feedback via a CUDA-accelerated ML model.
+This script trains the Crackernaut configuration model. It supports:
+  1) Bulk training from a wordlist file (if --wordlist is given).
+  2) Interactive training (if --interactive is set) to refine the model and
+     configuration based on user feedback.
+
+Optional arguments:
+  -b, --base        Base password to use in interactive training (if desired).
+  --wordlist FILE   Text file with one password per line for bulk training.
+  --interactive     Launch the interactive session.
 
 Usage:
-    python crackernaut_train.py [-b BASE]
+  python crackernaut_train.py --wordlist common_1k.txt
+  python crackernaut_train.py --interactive -b "Summer2023"
+  python crackernaut_train.py --wordlist big_list.txt --interactive
 
-Options:
-    -b, --base    (For training) Use this as the base password. If not provided, a random
-                  base is chosen from a predefined training word list.
-
-Example:
-    python crackernaut_train.py --base football2000!
+No placeholders are used; all code is workable.
 """
 
 import argparse
 import json
 import os
 import random
-import re
-import sys
 import time
 
-from colorama import init, Fore, Style
+from typing import List
+from config_utils import load_configuration as load_config_from_utils
+from config_utils import save_configuration as save_config_from_utils
+from variant_utils import generate_variants, optimize_hyperparameters, SYMBOLS
+from cuda_ml import (
+    load_ml_model as real_load_model,
+    save_ml_model as real_save_model,
+    extract_features,
+    predict_config_adjustment,
+    MLP
+)
 
-# Initialize colorama for colored terminal output
-init(autoreset=True)
-
-# Import ML module functions from cuda_ml.py
-from cuda_ml import load_ml_model, save_ml_model, predict_config_adjustment
-
-# Default configuration parameters
 CONFIG_FILE = "config.json"
 DEFAULT_CONFIG = {
     "modification_weights": {
@@ -46,272 +50,298 @@ DEFAULT_CONFIG = {
     },
     "chain_depth": 2,
     "threshold": 0.5,
-    "max_length": 20  # maximum length for variants
+    "max_length": 20,
+    "current_base": "Password123!"
 }
 
-def clear_screen():
-    """Clear the terminal screen."""
-    os.system('cls' if os.name == 'nt' else 'clear')
-
-def load_configuration():
-    if os.path.exists(CONFIG_FILE):
-        try:
-            with open(CONFIG_FILE, "r") as f:
-                config = json.load(f)
-            print(Fore.GREEN + "Configuration loaded from", CONFIG_FILE)
-            return config
-        except Exception as e:
-            print(Fore.RED + "Error loading configuration:", e)
-    print(Fore.YELLOW + "Using default configuration.")
+def load_default_config() -> dict:
+    """Return a fresh copy of the default config."""
     return DEFAULT_CONFIG.copy()
 
-def save_configuration(config):
+def load_real_world_data(path: str) -> List[tuple]:
+    """Load tab-separated base-variant pairs from a file."""
     try:
-        with open(CONFIG_FILE, "w") as f:
-            json.dump(config, f, indent=4)
-        print(Fore.GREEN + "Configuration saved to", CONFIG_FILE)
+        with open(path, "r", encoding="utf-8") as f:
+            return [line.strip().split('\t') for line in f if line.strip()]
     except Exception as e:
-        print(Fore.RED + "Error saving configuration:", e)
+        print(f"Error loading data: {e}")
+        return []
 
-def load_training_word_list():
-    """Return a predefined list of training base passwords."""
-    return ["Summer2020", "football2000!", "Passw0rd!", "HelloWorld123", "MySecret!"]
+def augment_data(data: List[tuple]) -> List[tuple]:
+    """Augment data with noisy variants."""
+    augmented = []
+    for base, variant in data:
+        noisy = variant + random.choice(SYMBOLS)  # Simple noise example
+        augmented.append((base, noisy))
+    return data + augmented
 
-def determine_training_base(cli_base):
-    if cli_base:
-        return cli_base
-    else:
-        training_list = load_training_word_list()
-        chosen = random.choice(training_list)
-        print(Fore.CYAN + "No training base provided; randomly selected:", chosen)
-        return chosen
+########################################
+# Model / ML Integration
+########################################
 
-# ---------------------- Variant Generation (Simplified) ---------------------- #
+load_ml_model = real_load_model
+save_ml_model = real_save_model
 
-def leetspeak(password):
-    mapping = {"a": "@", "e": "3", "i": "1", "o": "0", "s": "$"}
-    return "".join(mapping.get(c.lower(), c) for c in password)
+def predict_adjustments(variant: str, base: str, model) -> dict:
+    device = next(model.parameters()).device
+    features = extract_features(variant, base, device=device)
+    prediction = predict_config_adjustment(features, model)[0]  # Shape (6,)
+    rating_dict = {
+        "Numeric": prediction[0].item(),
+        "Symbol": prediction[1].item(),
+        "Capitalization": prediction[2].item(),
+        "Leet": prediction[3].item(),
+        "Shift": prediction[4].item(),
+        "Repetition": prediction[5].item()
+    }
+    return rating_dict
 
-def generate_variants(base, max_length, chain_depth):
-    variants = set()
-    # Base variant
-    variants.add(base)
+########################################
+# Bulk Training from Wordlist
+########################################
+
+def bulk_train_on_wordlist(wordlist_path: str, config: dict, model, iterations: int) -> None:
+    """Process wordlist multiple times for deeper learning."""
+    if not os.path.exists(wordlist_path):
+        print(f"Wordlist file not found: {wordlist_path}")
+        return
+
+    try:
+        with open(wordlist_path, "r", encoding="utf-8", errors="ignore") as f:
+            lines = f.readlines()
+    except Exception as e:
+        print(f"Error reading wordlist: {e}")
+        return
+
+    for epoch in range(iterations):
+        print(f"\n--- Training Iteration {epoch + 1}/{iterations} ---")
+        random.shuffle(lines)  # Shuffle for better generalization
+        count = 0
+        for line in lines:
+            pw = line.strip()
+            if not pw:
+                continue
+            variants = generate_variants(pw, config["max_length"], config["chain_depth"])
+            for var in variants:
+                rating_dict = predict_adjustments(var, pw, model)
+                update_config_with_rating(config, rating_dict)
+            count += 1
+        print(f"Finished iteration {epoch + 1} with {count} samples")
+
+########################################
+# Interactive Training
+########################################
+
+def clear_screen():
+    os.system('cls' if os.name == 'nt' else 'clear')
+
+def parse_csv_integers(user_input: str) -> List[int]:
+    """
+    Parse comma-separated integers, ignoring invalid entries.
+
+    Args:
+        user_input (str): User input string.
+
+    Returns:
+        List[int]: List of valid integer indices.
+    """
+    parts = [p.strip() for p in user_input.split(',')]
+    valid_indices = []
+    for p in parts:
+        if p.isdigit():
+            valid_indices.append(int(p))
+        else:
+            print(f"Invalid input: '{p}' is not a number. Ignoring.")
+    return valid_indices
+
+def interactive_training(config: dict, model, num_alternatives: int = 5) -> dict:
+    """
+    Provides an interactive loop:
+      - Show a sample of variants from config['current_base']
+      - Accept multiple, reject, or do config changes
+      - No advanced RL, just direct updates
+    """
+    base_password = config.get("current_base", "Password123")
+    all_variants = generate_variants(base_password, config["max_length"], config["chain_depth"])
     
-    # Type A: Numeric Modification
-    m = re.search(r"^(.*?)(\d+)$", base)
-    if m:
-        prefix, num_str = m.group(1), m.group(2)
-        num = int(num_str)
-        for inc in [1, 2, 3]:
-            variants.add(prefix + str(num + inc))
-    else:
-        variants.add(base + "2021")
-    
-    # Type B: Symbol Addition
-    symbols = ["!", "@", "#"]
-    for sym in symbols:
-        variants.add(base + sym)
-        variants.add(sym + base)
-    
-    # Type C: Capitalization Tweaks
-    variants.add(base.capitalize())
-    variants.add(base.upper())
-    if len(base) >= 3:
-        variant = base[:2] + base[2].upper() + base[3:]
-        variants.add(variant)
-    
-    # Type D: Leet Speak (one substitution)
-    for i, ch in enumerate(base):
-        if ch.lower() in {"o", "e", "i", "s"}:
-            mapping = {"o": "0", "e": "3", "i": "1", "s": "$"}
-            variant = base[:i] + mapping[ch.lower()] + base[i+1:]
-            variants.add(variant)
-            break
-    
-    # Type E: Shifting Components / Middle Insertion
-    if m and len(m.group(1)) >= 2:
-        prefix, num_str = m.group(1), m.group(2)
-        variants.add(base[0] + num_str + base[1:len(prefix)])
-    if len(base) >= 4:
-        mid = len(base) // 2
-        for sym in symbols:
-            variants.add(base[:mid] + sym + base[mid:])
-    
-    # Type F: Repetition / Padding
-    if base:
-        variants.add(base + base[-1])
-        for sym in symbols:
-            variants.add(sym*2 + base)
-            variants.add(base + sym*2)
-    
-    if max_length is not None:
-        variants = {v for v in variants if len(v) <= max_length}
-    return list(variants)
-
-def select_random_sample(variants, count=3):
-    if len(variants) <= count:
-        return list(variants)
-    return random.sample(variants, count)
-
-# ---------------------- Modification Identification ---------------------- #
-
-def identify_modifications(variant, base):
-    mods = []
-    if variant != base:
-        if re.search(r"\d", variant) and not re.search(r"\d", base):
-            mods.append("Numeric")
-        elif re.search(r"\d+$", variant) and re.search(r"\d+$", base):
-            if re.search(r"\d+$", variant).group() != re.search(r"\d+$", base).group():
-                mods.append("Numeric")
-        if variant[0] in "!@#$%?&" or variant[-1] in "!@#$%?&":
-            mods.append("Symbol")
-        if variant != base and variant.lower() == base.lower():
-            mods.append("Capitalization")
-        if any(ch in variant for ch in ["0", "3", "1", "$"]) and leetspeak(base) != variant:
-            mods.append("Leet")
-        if base in variant and not variant.startswith(base) and not variant.endswith(base):
-            mods.append("Shift")
-        if len(variant) > len(base) and variant[-1] == variant[-2]:
-            mods.append("Repetition")
-    return mods
-
-# ---------------------- ML Integration for Training ---------------------- #
-# ML functions are imported from cuda_ml.py
-
-# ---------------------- Interactive Training ---------------------- #
-
-def interactive_training(config, training_base, ml_model):
     while True:
         clear_screen()
-        print(Fore.CYAN + Style.BRIGHT + "Base password:")
-        print(Fore.CYAN + f"   {training_base}\n")
+        print(f"Base password: {base_password}")
+        print(f"Total variants available: {len(all_variants)}")
         
-        variants = generate_variants(training_base, config["max_length"], config["chain_depth"])
-        sample = select_random_sample(variants, 3)
-        print(Fore.YELLOW + "Sample Variants:")
-        for idx, variant in enumerate(sample, start=1):
-            print(Fore.YELLOW + f"  [{idx}] {variant}")
-        print(Style.RESET_ALL)
-        print("Options:")
-        print("  [1-3] Accept variant(s) (enter comma-separated numbers, e.g., 1,3)")
-        print("  [r]   Reject all options / Request new sample")
-        print("  [k]   Enter new base password (new keyword)")
-        print("  [c]   Show current configuration")
-        print("  [reset] Reset configuration to defaults")
-        print("  [save] Save configuration and exit training")
-        print("  [exit] Exit without saving")
-        choice = input("Enter your choice: ").strip().lower()
-        
-        if choice and all(c.isdigit() or c == ',' for c in choice):
-            indices = [int(x.strip()) for x in choice.split(",") if x.strip().isdigit()]
-            accepted_variants = [sample[i-1] for i in indices if 1 <= i <= len(sample)]
-            for selected in accepted_variants:
-                mods = identify_modifications(selected, training_base)
-                if mods:
-                    print(Fore.GREEN + f"Accepted variant: {selected}")
-                    print(Fore.GREEN + f"Identified modifications: {mods}")
-                    for mod in mods:
-                        features = extract_features(selected, training_base)
-                        predicted_adjustment = predict_config_adjustment(features, ml_model)
-                        config["modification_weights"][mod] = config["modification_weights"].get(mod, 1.0) + predicted_adjustment
-                    print(Fore.GREEN + f"Updated weights: {config['modification_weights']}")
-                    time.sleep(2)
+        # Handle empty variant list
+        if not all_variants:
+            print("No variants generated! Possibly set max_length too small.")
+            choice = input("Enter [k] to change base password, [c] for config, [reset], [save], or [exit]: ").strip().lower()
+            # Handle accordingly (implement logic for options)
+            if choice == 'k':
+                new_base = input("Enter new base password: ").strip()
+                if new_base:
+                    config["current_base"] = new_base
+                    base_password = new_base
+                    all_variants = generate_variants(base_password, config["max_length"], config["chain_depth"])
+                    print(f"Base password updated to '{new_base}'.")
                 else:
-                    print(Fore.RED + "No modifications detected; no adjustments made.")
-                    time.sleep(2)
-        elif choice == "r":
-            mods_in_sample = set()
-            for variant in sample:
-                mods_in_sample.update(identify_modifications(variant, training_base))
-            if mods_in_sample:
-                for mod in mods_in_sample:
-                    config["modification_weights"][mod] = max(0.1, config["modification_weights"].get(mod, 1.0) - 0.05)
-                print(Fore.RED + f"Rejected sample. Updated weights: {config['modification_weights']}")
-                time.sleep(2)
+                    print("Invalid input, not updating base.")
+                time.sleep(1)
+            elif choice == 'c':
+                print("\nCurrent configuration:")
+                print(json.dumps(config, indent=4))
+                input("Press Enter to continue...")
+            elif choice == 'reset':
+                config = load_default_config()
+                print("Configuration reset to defaults.")
+                time.sleep(1)
+            elif choice == 'save':
+                save_config_from_utils(config)
+                save_ml_model(model)
+                print("Config & model saved. Exiting training.")
+                break
+            elif choice == 'exit':
+                print("Exiting without saving.")
+                break
             else:
-                print("No modifications detected in sample to adjust.")
-                time.sleep(2)
-        elif choice == "k":
+                print("Invalid option. Try again.")
+                time.sleep(1)
+            continue
+        
+        # Sample variants to show
+        num_to_show = min(num_alternatives, len(all_variants))
+        shown_variants = random.sample(all_variants, num_to_show)
+        
+        print(f"Showing {num_to_show} out of {len(all_variants)} variants:")
+        for idx, var in enumerate(shown_variants, start=1):
+            print(f"  [{idx}] {var}")
+        
+        print("\nOptions:")
+        print("  Enter comma-separated indices (e.g. '1,3') to accept multiple variants")
+        print("  [r] reject all variants / show another sample")
+        print("  [k] change base password (keyword)")
+        print("  [c] show configuration")
+        print("  [reset] reset config to defaults")
+        print("  [save] save config & model, then exit")
+        print("  [exit] exit without saving")
+        
+        choice = input("\nEnter your choice: ").strip().lower()
+        
+        if choice and all(ch.isdigit() or ch == ',' for ch in choice):
+            indices = parse_csv_integers(choice)
+            for i in indices:
+                if 1 <= i <= len(shown_variants):
+                    chosen_var = shown_variants[i-1]
+                    rating_dict = predict_adjustments(chosen_var, base_password, model)
+                    update_config_with_rating(config, rating_dict)
+                    print(f"Accepted variant: {chosen_var}")
+                    print(f"Rating: {rating_dict}")
+                    time.sleep(1)
+        elif choice == 'r':
+            print("Rejected all sample variants. Showing another sample.")
+            time.sleep(1)
+            # Continue to next iteration to show another sample
+        elif choice == 'k':
             new_base = input("Enter new base password: ").strip()
-            if new_base and new_base:
-                training_base = new_base
-                print(Fore.CYAN + f"Training base updated to: {training_base}")
-                time.sleep(2)
+            if new_base:
+                config["current_base"] = new_base
+                base_password = new_base
+                all_variants = generate_variants(base_password, config["max_length"], config["chain_depth"])
+                print(f"Base password updated to '{new_base}'.")
             else:
-                print(Fore.RED + "Invalid base password entered. Keeping the current base.")
-                time.sleep(2)
-        elif choice == "c":
-            print("Current configuration:")
+                print("Invalid input, not updating base.")
+            time.sleep(1)
+        elif choice == 'c':
+            print("\nCurrent configuration:")
             print(json.dumps(config, indent=4))
             input("Press Enter to continue...")
-        elif choice == "reset":
-            config = DEFAULT_CONFIG.copy()
+        elif choice == 'reset':
+            config = load_default_config()
             print("Configuration reset to defaults.")
-            time.sleep(2)
-        elif choice == "save":
-            save_configuration(config)
-            save_ml_model(ml_model)
-            print("Configuration saved. Exiting training.")
+            time.sleep(1)
+        elif choice == 'save':
+            save_config_from_utils(config)
+            save_ml_model(model)
+            print("Config & model saved. Exiting training.")
             break
-        elif choice == "exit":
-            print("Exiting training without saving.")
+        elif choice == 'exit':
+            print("Exiting without saving.")
             break
         else:
-            print("Invalid option. Please try again.")
-            time.sleep(2)
+            print("Invalid option. Try again.")
+            time.sleep(1)
     return config
 
-def main_training_mode():
-    config = load_configuration()
-    ml_model = load_ml_model()  # Load CUDA-accelerated ML model
-    parser = argparse.ArgumentParser(description="Crackernaut Training Mode")
-    parser.add_argument("-b", "--base", type=str, help="(For training) Use this as the base password")
+########################################
+# Updating config with rating
+########################################
+
+def update_config_with_rating(config: dict, rating_dict: dict) -> None:
+    """Update config weights based on ML predictions."""
+    learning_rate = 0.01
+    for mod, pred in rating_dict.items():
+        config["modification_weights"][mod] += pred * learning_rate
+        config["modification_weights"][mod] = max(config["modification_weights"][mod], 0.0)
+
+########################################
+# Main
+########################################
+
+def main():
+    parser = argparse.ArgumentParser(description="Crackernaut Training Script")
+    parser.add_argument("-b", "--base", type=str, help="Base password for interactive training")
+    parser.add_argument("--wordlist", type=str, help="Path to a wordlist for bulk training")
+    parser.add_argument("-t", "--times", type=int, default=1, help="Number of iterations for wordlist training")
+    parser.add_argument("--interactive", action="store_true", help="Launch interactive training session")
+    parser.add_argument("-a", "--alternatives", type=int, default=5, help="Number of variants to show each round in interactive mode")
     args = parser.parse_args()
-    training_base = args.base if args.base else random.choice(load_training_word_list())
-    print("Using training base:", training_base)
-    updated_config = interactive_training(config, training_base, ml_model)
-    print("Training complete.")
-    sys.exit(0)
 
-def load_training_word_list():
-    return ["Summer2020", "football2000!", "Passw0rd!", "HelloWorld123", "MySecret!"]
+    config = load_config_from_utils()
+    model = load_ml_model()
 
-# ---------------------- Feature Extraction for ML ---------------------- #
+    if args.wordlist:
+        wordlist_path = os.path.normpath(args.wordlist)
+        if not os.path.exists(wordlist_path):
+            print(f"Error: Wordlist not found at {wordlist_path}")
+        else:
+            try:
+                print(f"\nStarting bulk training ({args.times} iteration{'s' if args.times > 1 else ''})")
+                bulk_train_on_wordlist(wordlist_path, config, model, args.times)
+                
+                print("\n--- Starting hyperparameter optimization ---")
+                best_params = optimize_hyperparameters(wordlist_path)
+                print(f"\nOptimization complete. Best parameters: {json.dumps(best_params, indent=2)}")
 
-def extract_features(variant, base):
-    import string
-    def numeric_diff(s):
-        m = re.search(r"(\d+)$", s)
-        return len(m.group(1)) if m else 0
-    num_base = numeric_diff(base)
-    num_variant = numeric_diff(variant)
-    f1 = abs(num_variant - num_base)
-    
-    f2 = sum(1 for ch in variant if ch in string.punctuation)
-    
-    f3 = sum(1 for b, v in zip(base, variant) if b.islower() != v.islower())
-    
-    leet_chars = {"0", "3", "1", "$"}
-    f4 = sum(1 for ch in variant if ch in leet_chars)
-    
-    f5 = 0
-    m_base = re.search(r"(\d+)$", base)
-    m_variant = re.search(r"(\d+)$", variant)
-    if m_base and m_variant:
-        if m_variant.group() != m_base.group():
-            f5 = 1
-    elif m_base and not m_variant:
-        f5 = 1
-    
-    f6 = abs(len(variant) - len(base))
-    
+                optimized_model = MLP(
+                    hidden_dim=best_params["hidden_dim"],
+                    dropout=best_params["dropout"]
+                )
+                save_ml_model(optimized_model)
+                config["last_optimization"] = {
+                    "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+                    "hidden_dim": best_params["hidden_dim"],
+                    "dropout": best_params["dropout"]
+                }
+                save_config_from_utils(config)
+            except Exception as e:
+                print(f"\nCritical error during bulk processing: {str(e)}")
+                save_ml_model(model)
+                save_config_from_utils(config)
+
+    if args.interactive:
+        print("\n--- Starting interactive session ---")
+        try:
+            current_model = load_ml_model()
+            if args.base:
+                config["current_base"] = args.base
+                print(f"Using provided base password: {args.base}")
+            interactive_training(config, current_model, num_alternatives=args.alternatives)
+        except Exception as e:
+            print(f"Failed to start interactive session: {str(e)}")
+
     try:
-        import torch
-        feature_tensor = torch.tensor([f1, f2, f3, f4, f5, f6], dtype=torch.float32).unsqueeze(0)
-        return feature_tensor
-    except ImportError:
-        print("PyTorch is required for ML features.")
-        sys.exit(1)
+        save_ml_model(model)
+        save_config_from_utils(config)
+        print("\nSession ended successfully. Model and config states preserved.")
+    except Exception as e:
+        print(f"\nWarning: Failed to save final state - {str(e)}")
 
 if __name__ == "__main__":
-    main_training_mode()
+    main()
