@@ -3,68 +3,8 @@
 **Purpose:**
 Crackernaut is a password guessing utility designed to generate human-like password variants from a given base password. It combines rule-based transformations with machine learning to produce plausible password guesses that reflect common patterns humans use when creating passwords. The tool is intended for security researchers, penetration testers, or anyone needing to test password strength by generating realistic variants for analysis or cracking attempts.
 
-**How It Works:**
-Crackernaut operates through several key components, each implemented in separate Python modules:
-
-1. **Main Script (`crackernaut.py`):**
-   - **Functionality**: This is the primary script for generating password variants. It accepts a base password (via command-line argument or user prompt), generates variants, scores them using a machine learning model, and outputs the top variants to the console or a file.
-   - **Process**:
-     - Loads configuration from a JSON file (via `config_utils.py`) or uses defaults.
-     - Generates variants using `generate_variants` from `variant_utils.py`.
-     - Scores variants with an MLP model from `cuda_ml.py`, weighting modifications based on configuration.
-     - Outputs the top-scoring variants, limited by user-specified parameters (`-n` for number, `-l` for length).
-
-2. **Variant Generation (`variant_utils.py`):**
-   - **Functionality**: Implements transformation functions to create password variants iteratively up to a specified chain depth.
-   - **Transformations**:
-     - Numeric increments (e.g., "Summer2020" → "Summer2021").
-     - Symbol additions (e.g., "password" → "password!").
-     - Capitalization tweaks (e.g., "password" → "Password").
-     - Leet speak substitutions (e.g., "password" → "p@ssw0rd").
-     - Shifts (e.g., "abc123" → "123abc").
-     - Repetitions (e.g., "pass" → "pass!!").
-     - Middle insertions (e.g., "password" → "pass@word").
-   - **Mechanism**: Uses a queue-based approach to apply transformations up to `chain_depth`, ensuring variants stay within `max_length`.
-
-3. **Machine Learning (`cuda_ml.py`):**
-   - **Functionality**: Provides a CUDA-accelerated multi-layer perceptron (MLP) model to score variants and predict configuration adjustments.
-   - **Model Details**:
-     - Input: 8D feature vector extracted from base-variant pairs (e.g., numeric suffix length, symbol count, capitalization differences).
-     - Output: 6D vector corresponding to modification types (Numeric, Symbol, Capitalization, Leet, Shift, Repetition).
-     - Architecture: Four-layer MLP with configurable hidden dimensions and dropout.
-   - **Training**: Supports training with `train_model`, using AdamW optimizer and Smooth L1 Loss on labeled data.
-   - **Feature Extraction**: Computes features like leet character presence, symbol positions, and length differences.
-
-4. **Training Script (`crackernaut_train.py`):**
-   - **Functionality**: Trains the ML model and refines configuration weights in two modes:
-     - **Bulk Training**: Processes a wordlist multiple times, generating variants and updating weights based on model predictions.
-     - **Interactive Training**: Allows users to accept/reject variants, updating weights based on feedback.
-   - **Hyperparameter Optimization**: Uses the Ax library to tune MLP parameters (hidden dimension, dropout) via Bayesian optimization.
-
-5. **Configuration**:
-   - Stored in `config.json`, with defaults including modification weights, chain depth, threshold, max length, and current base password.
-   - Weights influence variant scoring and can be adjusted during training.
-
-6. **Testing (`test_variants.py`):**
-   - Contains basic tests to verify transformation functions and variant generation.
-
-**Key Features:**
-- GPU acceleration with CUDA for faster computation.
-- Configurable transformation weights and generation parameters.
-- Interactive and bulk training for model customization.
-- Hyperparameter optimization for improved model performance.
-
 **Use Case:**
 Crackernaut is ideal for generating realistic password guesses for security testing, such as assessing the strength of password policies or simulating human behavior in password creation.
-
----
-
-### README.md for GitHub
-
-```markdown
-# Crackernaut
-
-Crackernaut is a password guessing utility that generates human-like password variants from a given base password. By combining rule-based transformations with a machine learning model, it produces plausible password guesses that reflect common human patterns. This tool is designed for security researchers, penetration testers, and anyone interested in testing password strength or simulating realistic password creation behaviors.
 
 ## Features
 
