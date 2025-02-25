@@ -1,455 +1,165 @@
 #!/usr/bin/env python3
-"""
-crackernaut.py
-
-Main production script for Crackernaut – a utility that generates human-like
-password variants from a given base password. The script loads configuration
-parameters (from a JSON file or defaults), generates variants via transformation
-chains, applies smart filtering based on a machine learning model, and outputs
-the top variants to the console or a specified file.
-
-Usage:
-    python crackernaut.py -p <base_password> [-l <max_length>] [-n <output_count>] [-o <output_file>]
-    
-    If -p is not provided, the script prompts for the base password.
-    The -l flag sets the maximum length of variants.
-    The -n flag limits the number of variants output.
-    The -o flag saves the output variants to a file.
-"""
-
 import argparse
-import os
-import re
+import logging
 import torch
-from config_utils import load_configuration
-from variant_utils import generate_variants, SYMBOLS
-from cuda_ml import load_ml_model, extract_features, predict_config_adjustment
-from tqdm import tqdm
-import queue
-import threading
-from variant_utils import generate_variants_parallel
+import os
+import sys
+from config_utils import load_configuration, save_configuration
+from variant_utils import generate_variants
+from performance_utils import measure_processing_time
 
-class VariantPipeline:
+# Add transformer model import
+from transformer_model import PasswordTransformer
+# Keep import for legacy models
+from cuda_ml import load_ml_model
+
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+logger = logging.getLogger('crackernaut')
+
+def setup_device():
+    """Set up and return the computation device"""
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    logger.info(f"Using device: {device}")
+    return device
+
+def load_model(config, device):
     """
-    Pipeline for concurrent variant generation and scoring.
-    Uses producer-consumer pattern to maximize resource utilization.
-    """
-    
-    def __init__(self, model, config, base_password, max_length=20, chain_depth=3, 
-                 queue_size=1000, num_producers=1, num_consumers=None):
-        """
-        Initialize the variant processing pipeline.
-        
-        Args:
-            model: ML model for scoring variants
-            config: Configuration parameters
-            base_password: Base password to generate variants from
-            max_length: Maximum length of variants
-            chain_depth: Chain depth for variant generation
-            queue_size: Size of internal queues
-            num_producers: Number of producer threads
-            num_consumers: Number of consumer threads (defaults to CPU count)
-        """
-        self.model = model
-        self.config = config
-        self.base = base_password
-        self.max_length = max_length
-        self.chain_depth = chain_depth
-        
-        # Determine device
-        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-        self.model = model.to(self.device)
-        self.model.eval()
-        
-        # Set up queues
-        self.variant_queue = queue.Queue(maxsize=queue_size)
-        self.result_queue = queue.Queue()
-        
-        # Set up workers
-        self.num_producers = num_producers
-        self.num_consumers = num_consumers if num_consumers else max(1, os.cpu_count() - 1)
-        
-        # Status flags
-        self.stop_requested = False
-        self.producers_done = 0
-        self.consumers_done = 0
-        
-        # Configure weights for scoring
-        self.weights = torch.tensor(self.config['weights'], dtype=torch.float32, device=self.device).view(-1, 1)
-    
-    def producer_task(self):
-        """Generate variants and add them to the queue"""
-        try:
-            # Generate variants in batches to avoid overwhelming the queue
-            variant_batches = []
-            batch_size = 1000
-            all_variants = generate_variants_parallel(self.base, self.max_length, self.chain_depth)
-            
-            # Split into batches
-            for i in range(0, len(all_variants), batch_size):
-                variant_batches.append(all_variants[i:i+batch_size])
-                
-            for batch in variant_batches:
-                if self.stop_requested:
-                    break
-                # Feed variants into queue
-                for variant in batch:
-                    if self.stop_requested:
-                        break
-                    self.variant_queue.put(variant)
-                
-        except Exception as e:
-            print(f"Producer error: {e}")
-        finally:
-            with threading.Lock():
-                self.producers_done += 1
-                if self.producers_done == self.num_producers:
-                    # Signal that all variants have been produced
-                    for _ in range(self.num_consumers):
-                        self.variant_queue.put(None)
-    
-    def consumer_task(self, consumer_id):
-        """Score variants from the queue"""
-        try:
-            while not self.stop_requested:
-                # Get next variant
-                variant = self.variant_queue.get()
-                if variant is None:
-                    # End signal received
-                    break
-                
-                try:
-                    # Process variant
-                    with torch.no_grad():
-                        # For weights, use the modification_weights from the config
-                        weights = [
-                            self.config["modification_weights"]["Numeric"],
-                            self.config["modification_weights"]["Symbol"],
-                            self.config["modification_weights"]["Capitalization"],
-                            self.config["modification_weights"]["Leet"],
-                            self.config["modification_weights"]["Shift"],
-                            self.config["modification_weights"]["Repetition"]
-                        ]
-                        weights_tensor = torch.tensor(weights, dtype=torch.float32, device=self.device).view(-1, 1)
-
-                        # Instead of config['feature_config'] pass a default value
-                        features = extract_features(variant, self.base, device=self.device)
-                        features_tensor = features.to(self.device)
-                        score = float((self.model(features_tensor.unsqueeze(0)) @ weights_tensor).item())
-                    
-                    # Store result
-                    self.result_queue.put((variant, score))
-                except Exception as e:
-                    print(f"Error processing variant {variant}: {e}")
-                finally:
-                    self.variant_queue.task_done()
-        
-        except Exception as e:
-            print(f"Consumer {consumer_id} error: {e}")
-        finally:
-            with threading.Lock():
-                self.consumers_done += 1
-                if self.consumers_done == self.num_consumers:
-                    # Signal that all scoring is done
-                    self.result_queue.put(None)
-    
-    def run(self):
-        """Run the pipeline and return scored variants"""
-        # Start threads
-        producer_threads = [threading.Thread(target=self.producer_task) 
-                           for _ in range(self.num_producers)]
-        
-        consumer_threads = [threading.Thread(target=self.consumer_task, args=(i,)) 
-                           for i in range(self.num_consumers)]
-        
-        # Start all threads
-        for thread in producer_threads + consumer_threads:
-            thread.daemon = True
-            thread.start()
-        
-        # Collect results
-        results = []
-        progress_bar = None
-        try:
-            while self.consumers_done < self.num_consumers:
-                result = self.result_queue.get(timeout=1.0)
-                if result is None:
-                    break
-                results.append(result)
-                
-                # Update progress bar
-                if progress_bar is None:
-                    progress_bar = tqdm(desc="Processing variants")
-                progress_bar.update(1)
-        except queue.Empty:
-            # Just retry if queue is temporarily empty
-            pass
-        finally:
-            if progress_bar:
-                progress_bar.close()
-        
-        # Wait for threads to finish
-        for thread in producer_threads + consumer_threads:
-            thread.join(timeout=0.5)
-        
-        # Sort by score
-        return sorted(results, key=lambda x: x[1], reverse=True)
-    
-    def stop(self):
-        """Stop the pipeline gracefully"""
-        self.stop_requested = True
-
-# Helper function to maintain compatibility with existing code
-def pipeline_variant_processing(base, max_length, chain_depth, model, config):
-    """Process variants using pipeline parallelism"""
-    pipeline = VariantPipeline(model, config, base, max_length, chain_depth)
-    return pipeline.run()
-
-def score_variants_optimized(variants, base, model, config, device=None):
-    """
-    Score password variants with optimized batch processing using GPU when available.
+    Load a model based on configuration
     
     Args:
-        variants: List of password variants to score
-        base: Base password for reference
-        model: Trained scoring model
-        config: Configuration parameters
-        device: Computation device (auto-detected if None)
+        config: Configuration dictionary
+        device: Computation device
         
     Returns:
-        List of (variant, score) tuples sorted by score
+        Loaded model
     """
-    if not variants:
-        return []
-        
-    # Determine device if not specified
-    if device is None:
-        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    model_type = config.get("model_type", "transformer").lower()
+    model_path = config.get("model_path", "ml_model.pth")
     
-    # Calculate optimal batch size based on available memory
-    if torch.cuda.is_available():
-        # Get free memory and estimate conservatively (in bytes)
-        free_memory = torch.cuda.get_device_properties(0).total_memory - torch.cuda.memory_allocated(0)
-        # Estimate 1KB per variant feature vector for safety
-        optimal_batch_size = min(len(variants), max(32, int(free_memory * 0.7 / 1024)))
+    if model_type == "transformer":
+        logger.info("Loading transformer model")
+        model = PasswordTransformer(
+            vocab_size=128,
+            embed_dim=config.get("model_embed_dim", 64),
+            num_heads=config.get("model_num_heads", 4),
+            num_layers=config.get("model_num_layers", 3),
+            hidden_dim=config.get("model_hidden_dim", 128),
+            dropout=config.get("model_dropout", 0.2),
+            output_dim=6  # For the six variant types
+        ).to(device)
+        
+        # Try to load saved model weights
+        if not model.load(model_path, device):
+            logger.warning(f"Could not load transformer model weights from {model_path}")
     else:
-        optimal_batch_size = 64  # Default CPU batch size
+        # Load legacy model (MLP, RNN, BiLSTM)
+        logger.info(f"Loading legacy {model_type} model")
+        model = load_ml_model(config, model_type=model_type, device=device)
     
-    model = model.to(device)
-    model.eval()
-    
-    # Get config weights
-    weights = torch.tensor([
-        config["modification_weights"]["Numeric"],
-        config["modification_weights"]["Symbol"],
-        config["modification_weights"]["Capitalization"],
-        config["modification_weights"]["Leet"],
-        config["modification_weights"]["Shift"],
-        config["modification_weights"]["Repetition"]
-    ], dtype=torch.float32, device=device).view(-1, 1)
-    
-    # Process variants in batches
-    scored_variants = []
-    with torch.no_grad():
-        for i in tqdm(range(0, len(variants), optimal_batch_size), desc="Scoring variants"):
-            batch = variants[i:i+optimal_batch_size]
-            
-            # Extract features for entire batch
-            batch_features = []
-            for variant in batch:
-                features = extract_features(variant, base, device=device)
-                batch_features.append(features)
-            
-            # Convert to tensor and process
-            features_batch = torch.stack(batch_features).to(device)
-            scores = model(features_batch) @ weights
-            
-            # Add to results
-            for j, (variant, score) in enumerate(zip(batch, scores.cpu().numpy().flatten())):
-                scored_variants.append((variant, float(score)))
-    
-    # Sort by score (descending)
-    return sorted(scored_variants, key=lambda x: x[1], reverse=True)
+    return model
 
-def process_large_wordlist(wordlist_path, model, config, batch_size=1000, max_passwords=None):
+def score_password_variants(model, base_password, variants, device):
     """
-    Process a large wordlist in memory-efficient batches.
+    Score variants for a password
     
     Args:
-        wordlist_path: Path to the wordlist file
-        model: ML model for processing
-        config: Configuration parameters
-        batch_size: Number of passwords to process at once
-        max_passwords: Maximum number of passwords to process (None = all)
+        model: Model to use for scoring
+        base_password: Original password
+        variants: List of variant passwords
+        device: Computation device
         
     Returns:
-        List of processed results
+        Dictionary with scored variants
     """
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    model = model.to(device)
-    model.eval()
-    
-    results = []
-    count = 0
-    
-    try:
-        # Count lines for progress bar
-        if max_passwords is None:
-            with open(wordlist_path, 'r', encoding='utf-8', errors='ignore') as f:
-                file_length = sum(1 for _ in f)
-            total = file_length
-        else:
-            total = max_passwords
-            
-        # Process in batches
-        with tqdm(total=total, desc="Processing wordlist") as pbar:
-            with open(wordlist_path, 'r', encoding='utf-8', errors='ignore') as f:
-                batch = []
-                
-                for line in f:
-                    if max_passwords is not None and count >= max_passwords:
-                        break
-                        
-                    password = line.strip()
-                    if not password:
-                        continue
-                        
-                    batch.append(password)
-                    count += 1
-                    
-                    if len(batch) >= batch_size:
-                        batch_results = process_password_batch(batch, model, config, device)
-                        results.extend(batch_results)
-                        pbar.update(len(batch))
-                        batch = []
-                
-                # Process remaining passwords
-                if batch:
-                    batch_results = process_password_batch(batch, model, config, device)
-                    results.extend(batch_results)
-                    pbar.update(len(batch))
-                    
-        return results
-    
-    except Exception as e:
-        print(f"Error processing wordlist: {e}")
-        # Return partial results if any
-        return results
-
-def process_password_batch(passwords, model, config, device):
-    """Process a batch of passwords using the model"""
-    results = []
-    
-    with torch.no_grad():
-        # Extract features for all passwords in batch
-        features_list = []
-        for password in passwords:
-            features = extract_features_for_wordlist(password, config)
-            features_list.append(features)
+    # If it's the transformer model, use its batch_score method
+    if isinstance(model, PasswordTransformer):
+        # Include the base password at the beginning
+        all_passwords = [base_password] + variants
+        scores_list = model.batch_score(all_passwords, device=device)
         
-        # Process features in one go
-        features_batch = torch.stack(features_list).to(device)
-        outputs = model(features_batch)
-        
-        # Process outputs
-        for i, (password, output) in enumerate(zip(passwords, outputs)):
-            # Process according to your model's output format
-            result = process_model_output(password, output, config)
-            results.append(result)
+        # Extract base score and variant scores
+        base_score = scores_list[0]
+        variant_scores = scores_list[1:]
+    else:
+        # Legacy model scoring
+        # (Assuming the legacy model has methods to score passwords)
+        # This would need to be implemented based on the actual legacy model interface
+        logger.warning("Legacy model scoring not fully implemented")
+        base_score = {}
+        variant_scores = [{} for _ in variants]
+    
+    # Return results in the expected format
+    results = {
+        "base_password": base_password,
+        "base_score": base_score,
+        "variants": []
+    }
+    
+    # Add variant info
+    for i, variant in enumerate(variants):
+        results["variants"].append({
+            "password": variant,
+            "score": variant_scores[i]
+        })
     
     return results
 
-def extract_features_for_wordlist(password, config):
-    """Extract features from password for wordlist processing"""
-    # Create a dummy base password for feature extraction
-    base = password[:len(password)//2] if len(password) > 4 else "password"
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    return extract_features(password, base, device=device)
-
-def process_model_output(password, output, config):
-    """Process model output for a password"""
-    # Sum the outputs and convert to a score
-    score = float(output.sum().item())
-    return (password, score)
-
 def main():
-    """Main function to generate and output password variants."""
-    parser = argparse.ArgumentParser(description="Crackernaut Variant Generator")
-    parser.add_argument("-p", "--password", type=str, help="Base password (if not provided, prompt for input)")
-    parser.add_argument("-l", "--length", type=int, help="Maximum length of generated variants")
-    parser.add_argument("-n", "--number", type=int, help="Limit number of variants to output")
-    parser.add_argument("-o", "--output", type=str, help="File to save the variants")
+    """Main function to run Crackernaut"""
+    parser = argparse.ArgumentParser(description="Crackernaut - Password Variant Generator & Scorer")
+    parser.add_argument("--password", "-p", type=str, help="Base password to analyze")
+    parser.add_argument("--config", "-c", type=str, default="config.json", help="Path to configuration file")
+    parser.add_argument("--depth", "-d", type=int, help="Chain depth for variant generation")
+    parser.add_argument("--model", "-m", type=str, help="Model type: transformer, rnn, bilstm, mlp")
+    
     args = parser.parse_args()
     
-    # Load configuration settings from config_utils
-    config = load_configuration()
+    # Load configuration
+    config = load_configuration(args.config)
     
-    # Load the ML model from cuda_ml and determine the device (CPU or CUDA)
-    model = load_ml_model()
-    device = next(model.parameters()).device
+    # Override configuration with command-line arguments
+    if args.depth:
+        config["chain_depth"] = args.depth
+    if args.model:
+        config["model_type"] = args.model
     
-    if args.password:
-        base = args.password.strip()
-    else:
-        base = input("Enter base password: ").strip()
+    # Set up device
+    device = setup_device()
     
-    # Validate the base password: must contain letters and be at least 3 characters
-    while not base or len(base) < 3 or not re.search(r"[a-zA-Z]", base):
-        print("Invalid base password. Must contain letters and be at least 3 characters.")
-        base = input("Enter base password: ").strip()
+    # Load model
+    model = load_model(config, device)
     
-    # Override the config's max_length if provided via args
-    if args.length:
-        config["max_length"] = args.length
+    # Get base password
+    base_password = args.password
+    if not base_password:
+        base_password = input("Enter a base password: ").strip()
     
-    # Generate variants using variant_utils
-    variants = generate_variants(base, config["max_length"], config["chain_depth"])
+    # Generate variants
+    with measure_processing_time("Variant generation"):
+        variants = generate_variants(base_password, config)
     
-    if not variants:
-        print("No variants generated. Try adjusting the configuration.")
-        return
+    logger.info(f"Generated {len(variants)} variants for '{base_password}'")
     
-    # Add progress indication for variant generation
-    print(f"Scoring {len(variants)} variants...")
-    scored_variants = score_variants_optimized(variants, base, model, config, device)
+    # Score variants
+    with measure_processing_time("Variant scoring"):
+        results = score_password_variants(model, base_password, variants, device)
     
-    if not scored_variants:
-        print("No variants meet the scoring criteria.")
-        return
+    # Print results
+    print(f"\nBase password: {base_password}")
+    print("Top variants by score:")
     
-    # Select the top N variants if specified, otherwise select all
-    if args.number:
-        output_variants = [var for var, score in scored_variants[:args.number]]
-    else:
-        output_variants = [var for var, score in scored_variants]
+    # Sort variants by highest score
+    def get_max_score(var_data):
+        return max(var_data["score"].values())
     
-    # Handle output: save to file if specified, otherwise print to console
-    if args.output:
-        try:
-            # Check if the output file already exists
-            if os.path.exists(args.output):
-                choice = input(f"File {args.output} exists. Overwrite (o), append (a), or cancel (c)? ").strip().lower()
-                if choice == 'o':
-                    mode = 'w'  # Overwrite
-                elif choice == 'a':
-                    mode = 'a'  # Append
-                else:
-                    print("Operation canceled.")
-                    return
-            else:
-                mode = 'w'  # Write new file
-            # Write variants to the file
-            with open(args.output, mode) as f:
-                for variant in output_variants:
-                    f.write(variant + "\n")
-            print(f"Variants saved to {args.output}")
-        except IOError as e:
-            print(f"Error saving variants: {e}")
-    else:
-        # Output variants to the console
-        print("Generated Variants:")
-        for variant in output_variants:
-            print(variant)
+    sorted_variants = sorted(results["variants"], key=get_max_score, reverse=True)
+    
+    for i, var_data in enumerate(sorted_variants[:10]):  # Show top 10
+        variant = var_data["password"]
+        max_score = get_max_score(var_data)
+        print(f"{i+1}. {variant} (Score: {max_score:.4f})")
+    
+    return 0
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

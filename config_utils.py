@@ -1,5 +1,9 @@
 import json
 import os
+import logging
+
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+logger = logging.getLogger('config_utils')
 
 PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
 CONFIG_FILE = os.path.join(PROJECT_ROOT, "config.json")
@@ -14,50 +18,70 @@ DEFAULT_CONFIG = {
     },
     "chain_depth": 2,
     "threshold": 0.5,
-    "max_length": 20
+    "max_length": 20,
+    "model_type": "transformer",  # New default option for transformer-based scoring
+    "model_embed_dim": 64,
+    "model_num_heads": 4,
+    "model_num_layers": 3,
+    "model_hidden_dim": 128,
+    "model_dropout": 0.2,
+    "lp_chunk_size": 1000000,      # Chunk size for list preparation
+    "lp_output_dir": "clusters"     # Output directory for clusters
 }
 
-def load_configuration():
+def load_configuration(config_file=CONFIG_FILE):
     """
-    Load configuration from a JSON file, falling back to defaults if unavailable or invalid.
-
-    Returns:
-        dict: Configuration settings with non-negative modification weights.
-    """
-    if os.path.exists(CONFIG_FILE):
-        try:
-            with open(CONFIG_FILE, "r", encoding="utf-8") as f:
-                config = json.load(f)
-            print(f"Configuration loaded from {CONFIG_FILE}")
-            for mod in config["modification_weights"]:
-                config["modification_weights"][mod] = max(config["modification_weights"][mod], 0.0)
-            return config
-        except json.JSONDecodeError as e:
-            print(f"Error decoding JSON: {e}")
-            print("Using default configuration.")
-            return DEFAULT_CONFIG.copy()
-        except PermissionError:
-            print("Error: Permission denied.")
-            return DEFAULT_CONFIG.copy()
-        except Exception as e:
-            print(f"Error loading configuration: {e}")
-            return DEFAULT_CONFIG.copy()
-    else:
-        print("Config file not found. Using defaults.")
-        return DEFAULT_CONFIG.copy()
-
-def save_configuration(config):
-    """
-    Save configuration to a JSON file.
-
+    Load configuration from a JSON file or use default.
+    
     Args:
-        config (dict): Configuration settings to save.
+        config_file: Path to configuration file
+        
+    Returns:
+        Configuration dictionary
     """
     try:
-        with open(CONFIG_FILE, "w", encoding="utf-8") as f:
-            json.dump(config, f, indent=4)
-        print(f"Configuration saved to {CONFIG_FILE}")
-    except PermissionError:
-        print("Error: Permission denied.")
+        if os.path.exists(config_file):
+            with open(config_file, 'r') as f:
+                config = json.load(f)
+                logger.info(f"Configuration loaded from {config_file}")
+                
+                # Ensure all default keys exist by combining with defaults
+                for key, value in DEFAULT_CONFIG.items():
+                    if key not in config:
+                        config[key] = value
+                        
+                return config
+        else:
+            logger.warning(f"Configuration file {config_file} not found, using defaults")
+            return DEFAULT_CONFIG.copy()
     except Exception as e:
-        print(f"Error saving configuration: {e}")
+        logger.error(f"Error loading configuration: {e}")
+        return DEFAULT_CONFIG.copy()
+
+def save_configuration(config, config_file=CONFIG_FILE):
+    """
+    Save configuration to a JSON file.
+    
+    Args:
+        config: Configuration dictionary
+        config_file: Path to save configuration
+        
+    Returns:
+        True if successful, False otherwise
+    """
+    try:
+        with open(config_file, 'w') as f:
+            json.dump(config, f, indent=4)
+        logger.info(f"Configuration saved to {config_file}")
+        return True
+    except Exception as e:
+        logger.error(f"Error saving configuration: {e}")
+        return False
+
+if __name__ == "__main__":
+    # Create a default configuration file if one doesn't exist
+    if not os.path.exists(CONFIG_FILE):
+        save_configuration(DEFAULT_CONFIG)
+        print("Created default configuration file: config.json")
+    else:
+        print("Configuration file already exists")

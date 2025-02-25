@@ -6,18 +6,25 @@ This script trains the Crackernaut configuration model. It supports:
   1) Bulk training from a wordlist file (if --wordlist is given).
   2) Interactive training (if --interactive is set) to refine the model and
      configuration based on user feedback.
+  3) List preparation (if --prepare is given) to preprocess a massive password dataset
+     into clusters via the list preparer module.
 
 Optional arguments:
   -b, --base        Base password to use in interactive training (if desired).
   --wordlist FILE   Text file with one password per line for bulk training.
+  --prepare         Trigger list preparation from a massive dataset.
+  --lp-dataset PATH Path to the massive password dataset for list preparation.
+  --lp-output DIR   Output directory for list preparation clusters (default: clusters).
+  --lp-chunk-size N Chunk size for list preparation (default: 1000000).
   --interactive     Launch the interactive session.
+  --supervised      Use supervised learning on wordlist.
+  ... (other options as before)
 
 Usage:
+  python crackernaut_train.py --prepare --lp-dataset <path_to_dataset> [--lp-output clusters]
   python crackernaut_train.py --wordlist common_1k.txt
   python crackernaut_train.py --interactive -b "Summer2023"
   python crackernaut_train.py --wordlist big_list.txt --interactive
-
-No placeholders are used; all code is workable.
 """
 
 import argparse
@@ -28,6 +35,9 @@ import time
 import logging
 import torch
 import torch.nn.functional as F
+import torch.nn as nn
+from torch.utils.data import DataLoader
+from torch.optim.lr_scheduler import CosineAnnealingLR
 
 from typing import List, Tuple, Optional
 from tqdm import tqdm
@@ -51,7 +61,7 @@ from cuda_ml import (
     train_self_supervised,
     create_parallel_model
 )
-
+from list_preparer import PasswordEmbeddingModel  # Import the model
 
 # Configure logging
 logging.basicConfig(
@@ -215,12 +225,10 @@ def bulk_train_on_wordlist(wordlist_path: str, config: dict, model, iterations: 
                 var_batch, base_batch = extract_sequence_batch(all_variants, all_bases, device=device)
                 predictions = model(var_batch)
                 
-                # Create target tensor - this is simplified and would need to be refined
-                # based on your specific task requirements
+                # Create target tensor - simplified target based on similarity
                 targets = torch.zeros_like(predictions)
                 for i, (variant, base) in enumerate(zip(all_variants, all_bases)):
                     similarity = len(set(variant).intersection(set(base))) / max(len(variant), len(base))
-                    # Higher similarity = higher target scores
                     targets[i] = torch.tensor([similarity] * 6)
                 
                 loss = F.mse_loss(predictions, targets)
@@ -230,8 +238,6 @@ def bulk_train_on_wordlist(wordlist_path: str, config: dict, model, iterations: 
                 for variant, base in zip(all_variants, all_bases):
                     features = extract_features(variant, base, device=device)
                     prediction = predict_config_adjustment(features, model)
-                    
-                    # Simple loss based on existing config weights
                     target = torch.tensor([config["modification_weights"][mod] 
                                            for mod in ["Numeric", "Symbol", "Capitalization", 
                                                       "Leet", "Shift", "Repetition"]], 
@@ -251,7 +257,6 @@ def bulk_train_on_wordlist(wordlist_path: str, config: dict, model, iterations: 
                 
         logger.info(f"Finished epoch {epoch + 1} with {len(lines)} passwords")
     
-    # Set model to evaluation mode when done
     model.eval()
 
 ########################################
@@ -264,12 +269,6 @@ def clear_screen():
 def parse_csv_integers(user_input: str) -> List[int]:
     """
     Parse comma-separated integers, ignoring invalid entries.
-
-    Args:
-        user_input (str): User input string.
-
-    Returns:
-        List[int]: List of valid integer indices.
     """
     parts = [p.strip() for p in user_input.split(',')]
     valid_indices = []
@@ -283,9 +282,6 @@ def parse_csv_integers(user_input: str) -> List[int]:
 def handle_empty_variants(config: dict, model) -> Tuple[bool, Optional[str]]:
     """
     Handle the case when no variants are generated.
-    
-    Returns:
-        Tuple[bool, Optional[str]]: (should_exit, new_base_password)
     """
     logger.warning("No variants generated! Possibly max_length too small.")
     choice = input("Enter [k] to change base password, [c] for config, [reset], [save], or [exit]: ").strip().lower()
@@ -327,27 +323,16 @@ def handle_user_selection(indices: List[int], shown_variants: List[str],
                          base_password: str, model, config: dict) -> None:
     """
     Process user-selected variants for training.
-    
-    Args:
-        indices (List[int]): List of selected variant indices
-        shown_variants (List[str]): List of displayed variants
-        base_password (str): Original base password
-        model (nn.Module): PyTorch model
-        config (dict): Configuration dictionary
     """
     selected_variants = []
-    
     for i in indices:
         if 1 <= i <= len(shown_variants):
             chosen_var = shown_variants[i-1]
             selected_variants.append(chosen_var)
             logger.info(f"Selected variant: {chosen_var}")
-    
     if selected_variants:
         logger.info(f"Training on {len(selected_variants)} selected variants")
         train_on_selected_variants(selected_variants, base_password, model, config)
-        
-        # Display the new ratings after training
         for variant in selected_variants:
             rating_dict = predict_adjustments(variant, base_password, model)
             logger.info(f"New ratings for '{variant}': {rating_dict}")
@@ -355,9 +340,6 @@ def handle_user_selection(indices: List[int], shown_variants: List[str],
 def handle_config_commands(choice: str, config: dict, model) -> Tuple[bool, Optional[str]]:
     """
     Handle configuration and control commands.
-    
-    Returns:
-        Tuple[bool, Optional[str]]: (should_exit, new_base_password)
     """
     if choice == 'k':
         new_base = input("Enter new base password: ").strip()
@@ -394,10 +376,9 @@ def handle_config_commands(choice: str, config: dict, model) -> Tuple[bool, Opti
 
 def interactive_training(config: dict, model, num_alternatives: int = 5) -> dict:
     """
-    Provides an interactive loop:
-      - Show a sample of variants from config['current_base']
-      - Accept multiple, reject, or do config changes
-      - No advanced RL, just direct updates
+    Provides an interactive training loop:
+      - Displays a sample of variants from config['current_base']
+      - Accepts user input for variant selection or configuration changes
     """
     base_password = config.get("current_base", "Password123")
     all_variants = generate_variants(base_password, config["max_length"], config["chain_depth"])
@@ -407,7 +388,6 @@ def interactive_training(config: dict, model, num_alternatives: int = 5) -> dict
         logger.info(f"Base password: {base_password}")
         logger.info(f"Total variants available: {len(all_variants)}")
         
-        # Handle empty variant list
         if not all_variants:
             should_exit, new_base = handle_empty_variants(config, model)
             if should_exit:
@@ -417,7 +397,6 @@ def interactive_training(config: dict, model, num_alternatives: int = 5) -> dict
                 all_variants = generate_variants(base_password, config["max_length"], config["chain_depth"])
             continue
         
-        # Sample variants to show
         num_to_show = min(num_alternatives, len(all_variants))
         shown_variants = random.sample(all_variants, num_to_show)
         
@@ -426,9 +405,9 @@ def interactive_training(config: dict, model, num_alternatives: int = 5) -> dict
             print(f"  [{idx}] {var}")
         
         print("\nOptions:")
-        print("  Enter comma-separated indices (e.g. '1,3') to accept multiple variants")
+        print("  Enter comma-separated indices (e.g. '1,3') to accept variants")
         print("  [r] reject all variants / show another sample")
-        print("  [k] change base password (keyword)")
+        print("  [k] change base password")
         print("  [c] show configuration")
         print("  [reset] reset config to defaults")
         print("  [save] save config & model, then exit")
@@ -440,9 +419,8 @@ def interactive_training(config: dict, model, num_alternatives: int = 5) -> dict
             indices = parse_csv_integers(choice)
             handle_user_selection(indices, shown_variants, base_password, model, config)
         elif choice == 'r':
-            logger.info("Rejected all sample variants. Showing another sample.")
+            logger.info("Rejected sample variants. Showing another sample.")
             time.sleep(1)
-            # Continue to next iteration to show another sample
         else:
             should_exit, new_base = handle_config_commands(choice, config, model)
             if should_exit:
@@ -459,7 +437,6 @@ def interactive_training(config: dict, model, num_alternatives: int = 5) -> dict
 
 def update_config_with_rating(config: dict, rating_dict: dict) -> None:
     """Update config weights based on ML predictions."""
-    # Use learning rate from config with fallback to default
     learning_rate = config.get("learning_rate", 0.01)
     for mod, pred in rating_dict.items():
         config["modification_weights"][mod] += pred * learning_rate
@@ -472,33 +449,21 @@ def update_config_with_rating(config: dict, rating_dict: dict) -> None:
 def evaluate_model(model, test_data, config):
     """
     Evaluate model performance on test data.
-    
-    Args:
-        model (nn.Module): PyTorch model
-        test_data (list): List of (base, variant) password pairs
-        config (dict): Configuration dictionary
-        
-    Returns:
-        dict: Dictionary of performance metrics
     """
     device = next(model.parameters()).device
-    model.eval()  # Set model to evaluation mode
+    model.eval()
     
     total_samples = len(test_data)
     correct_predictions = 0
     mse_loss = 0.0
     
-    # Process based on model type
     for base, variant in test_data:
-        # For simplicity, we assume a correct prediction means a positive score
         rating_dict = predict_adjustments(variant, base, model)
         avg_rating = sum(rating_dict.values()) / len(rating_dict)
         
-        # Consider prediction correct if average rating is positive
         if avg_rating > 0:
             correct_predictions += 1
         
-        # Calculate MSE against an ideal positive target
         target = 1.0
         mse_loss += (avg_rating - target) ** 2
     
@@ -519,38 +484,88 @@ def evaluate_model(model, test_data, config):
 # Main
 ########################################
 
+import argparse
+import asyncio
+from config_utils import load_configuration as load_config_from_utils
+from list_preparer import run_preparation
+
+parser = argparse.ArgumentParser(description="Crackernaut Training Script")
+parser.add_argument("--prepare", action="store_true", help="Trigger list preparation")
+parser.add_argument("--lp-dataset", type=str, help="Path to large password dataset for list preparation")
+parser.add_argument("--lp-output", type=str, default="clusters", help="Output directory for clusters")
+parser.add_argument("--lp-chunk-size", type=int, default=1000000, help="Chunk size for list preparation")
+# ... other arguments ...
+
+args = parser.parse_args()
+config = load_config_from_utils("config.json")
+
+if args.prepare:
+    if not args.lp_dataset:
+        print("Error: Please specify the dataset path with --lp-dataset")
+        exit(1)
+    asyncio.run(run_preparation(args.lp_dataset, output=args.lp_output, chunk_size=args.lp_chunk_size))
+    exit(0)
+
+# For training:
+model_type = config.get("model_type", "rnn").lower()
+if model_type == "transformer":
+    from transformer_model import PasswordTransformer
+    model = PasswordTransformer(
+        vocab_size=128,
+        embed_dim=config.get("model_embed_dim", 64),
+        num_heads=config.get("model_num_heads", 4),
+        num_layers=config.get("model_num_layers", 3),
+        hidden_dim=config.get("model_hidden_dim", 128),
+        dropout=config.get("model_dropout", 0.2),
+        output_dim=6
+    )
+else:
+    model = real_load_model(config, model_type=model_type)
+
 def main():
     parser = argparse.ArgumentParser(description="Crackernaut Training Script")
     parser.add_argument("-b", "--base", type=str, help="Base password for interactive training")
     parser.add_argument("--wordlist", type=str, help="Path to a wordlist for bulk training")
     parser.add_argument("-t", "--times", type=int, default=1, help="Number of iterations for wordlist training")
     parser.add_argument("--interactive", action="store_true", help="Launch interactive training session")
-    parser.add_argument("-a", "--alternatives", type=int, default=5, help="Number of variants to show each round in interactive mode")
+    parser.add_argument("-a", "--alternatives", type=int, default=5, help="Number of variants to show in interactive mode")
     parser.add_argument("--learning-rate", type=float, help="Override the default learning rate")
     parser.add_argument("-v", "--verbose", action="store_true", help="Enable verbose logging")
     parser.add_argument("--model", type=str, choices=["mlp", "rnn"], default="rnn",
                         help="Model architecture to use (mlp or rnn)")
-    parser.add_argument("--supervised", action="store_true", 
-                        help="Use supervised learning on wordlist")
+    parser.add_argument("--supervised", action="store_true", help="Use supervised learning on wordlist")
     parser.add_argument("--model-type", type=str, choices=["mlp", "rnn", "bilstm"],
                         default="bilstm", help="Type of model architecture")
+    # New arguments for list preparation integration
+    parser.add_argument("--prepare", action="store_true", help="Trigger list preparation on a massive dataset")
+    parser.add_argument("--lp-dataset", type=str, help="Path to massive password dataset for list preparation")
+    parser.add_argument("--lp-output", type=str, default="clusters", help="Output directory for list preparation clusters")
+    parser.add_argument("--lp-chunk-size", type=int, default=1000000, help="Chunk size for list preparation")
+    
     args = parser.parse_args()
 
-    # Configure logging level based on verbosity
+    # If --prepare is set, trigger list preparation and exit.
+    if args.prepare:
+        if not args.lp_dataset:
+            logger.error("Error: --lp-dataset must be provided when using --prepare.")
+            return
+        import asyncio
+        import list_preparer
+        logger.info("Starting list preparation on massive dataset...")
+        asyncio.run(list_preparer.run_preparation(args.lp_dataset, args.lp_output, args.lp_chunk_size))
+        logger.info("List preparation completed. Exiting training script.")
+        return
+
     if args.verbose:
         logger.setLevel(logging.DEBUG)
     
     logger.info("Starting Crackernaut training")
     config = load_config_from_utils()
     
-    # Update model type in config
     config["model_type"] = args.model
-    
-    # Load the appropriate model
     model = load_ml_model(config, model_type=args.model)
     logger.info(f"Using {args.model.upper()} model architecture")
 
-    # Override learning rate if specified
     if args.learning_rate:
         config["learning_rate"] = args.learning_rate
         logger.info(f"Learning rate set to {args.learning_rate}")
@@ -565,8 +580,6 @@ def main():
                 bulk_train_on_wordlist(wordlist_path, config, model, args.times)
                 
                 logger.info("Starting hyperparameter optimization")
-                
-                # Different hyperparameter optimization based on model type
                 if args.model == "rnn":
                     best_params = {
                         "embed_dim": 32,
@@ -574,14 +587,12 @@ def main():
                         "num_layers": 2,
                         "dropout": 0.2,
                     }
-                    # In real implementation, you'd call an RNN-specific optimization function
                 else:
                     best_params = optimize_hyperparameters(wordlist_path)
                 
                 logger.info(f"Optimization complete. Best parameters: {json.dumps(best_params, indent=2)}")
-
-                # Create optimized model based on type
                 if args.model == "rnn":
+                    from cuda_ml import PasswordRNN
                     optimized_model = PasswordRNN(
                         vocab_size=128,
                         embed_dim=best_params.get("embed_dim", 32),
@@ -590,8 +601,6 @@ def main():
                         num_layers=best_params.get("num_layers", 2),
                         dropout=best_params.get("dropout", 0.2)
                     )
-                    
-                    # Store RNN parameters
                     config["model_embed_dim"] = best_params.get("embed_dim", 32)
                     config["model_hidden_dim"] = best_params.get("hidden_dim", 64)
                     config["model_num_layers"] = best_params.get("num_layers", 2)
@@ -604,8 +613,6 @@ def main():
                     )
                 
                 save_ml_model(optimized_model, model_type=args.model)
-                
-                # Store optimization results
                 config["last_optimization"] = {
                     "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
                     "model_type": args.model,
@@ -622,25 +629,18 @@ def main():
             logger.info("Loading passwords for supervised training...")
             passwords = load_passwords(wordlist_path, max_count=500000)
             logger.info(f"Loaded {len(passwords)} passwords")
-            
-            # Extract realistic training pairs
             logger.info("Mining training pairs from password patterns...")
             training_pairs = generate_realistic_training_data(passwords)
             logger.info(f"Found {len(training_pairs)} training pairs")
-            
-            # Create appropriate model based on args
             if args.model_type == "bilstm":
+                from cuda_ml import PasswordBiLSTM
                 model = PasswordBiLSTM(
                     vocab_size=128, 
                     embed_dim=32, 
                     hidden_dim=64, 
                     output_dim=6
                 )
-            
-            # Use parallel training if available
             model = create_parallel_model(model, min_dataset_size=len(training_pairs))
-            
-            # Train with supervised learning
             logger.info("Starting supervised training...")
             model = train_self_supervised(
                 model, 
@@ -649,18 +649,14 @@ def main():
                 batch_size=64, 
                 lr=0.001
             )
-            
-            # Save the model
             save_ml_model(model, model_type=args.model_type)
-            logger.info("supervised training complete")
-            
+            logger.info("Supervised training complete")
         except Exception as e:
             logger.error(f"Error during supervised training: {e}", exc_info=True)
 
     if args.interactive:
         logger.info("Starting interactive session")
         try:
-            # Use the same model type for interactive session
             current_model = model
             if args.base:
                 config["current_base"] = args.base
@@ -670,25 +666,19 @@ def main():
             logger.error(f"Failed to start interactive session: {str(e)}", exc_info=True)
 
     if args.wordlist and os.path.exists(wordlist_path):
-        # Create small test set from wordlist
         try:
             logger.info("Evaluating model performance...")
             with open(wordlist_path, "r", encoding="utf-8", errors="ignore") as f:
-                test_passwords = [line.strip() for line in f][:100]  # Take first 100 passwords
-                
+                test_passwords = [line.strip() for line in f][:100]
             test_data = []
             for pw in test_passwords:
                 variants = generate_variants(pw, config["max_length"], config["chain_depth"])
                 if variants:
-                    # Include a couple of variants per password
                     test_data.extend([(pw, variant) for variant in random.sample(variants, min(2, len(variants)))])
-            
             metrics = evaluate_model(model, test_data, config)
             logger.info(f"Model evaluation on {metrics['samples']} samples:")
             logger.info(f"  Accuracy: {metrics['accuracy']:.4f}")
             logger.info(f"  Mean Squared Error: {metrics['mse']:.4f}")
-            
-            # Store evaluation results in config
             config["last_evaluation"] = {
                 "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
                 "samples": metrics["samples"],
@@ -712,208 +702,66 @@ if __name__ == "__main__":
 def train_on_selected_variants(selected_variants, base_password, model, config):
     """
     Train the model on user-selected variants.
-    
-    Args:
-        selected_variants: List of selected variant passwords
-        base_password: Original base password
-        model: PyTorch model
-        config: Configuration dictionary
     """
     if not selected_variants:
         return
     
     device = next(model.parameters()).device
-    
-    # Create optimizer
     optimizer = torch.optim.Adam(model.parameters(), lr=config.get("learning_rate", 0.01), weight_decay=0.01)
-    
-    # Training loop
     model.train()
     for variant in selected_variants:
-        # Extract features based on model type
         if isinstance(model, PasswordRNN) or isinstance(model, PasswordBiLSTM):
             var_tensor, _ = extract_sequence_features(variant, base_password, device=device)
-            # Simplified target: higher values for selected variants
             target = torch.ones(6, device=device) * 0.8
-            
-            # Forward pass, loss and optimization
             optimizer.zero_grad()
             prediction = model(var_tensor)
             loss = F.mse_loss(prediction[0], target)
             loss.backward()
             optimizer.step()
         else:
-            # MLP model
             features = extract_features(variant, base_password, device=device)
             target = torch.ones(6, device=device) * 0.8
-            
             optimizer.zero_grad()
             prediction = model(features)
             loss = F.mse_loss(prediction[0], target)
             loss.backward()
             optimizer.step()
-        
-        # Update config weights based on new model outputs
         rating_dict = predict_adjustments(variant, base_password, model)
         update_config_with_rating(config, rating_dict)
-    
-    # Set model back to evaluation mode
     model.eval()
 
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
-from torch.cuda.amp import autocast, GradScaler
-from typing import List, Tuple, Set
-import os
+# Training function for transformer model
+def train_model(model, train_dataset, epochs=10, device="cuda"):
+    if isinstance(model, PasswordEmbeddingModel):
+        criterion = nn.MarginRankingLoss(margin=1.0)
+        optimizer = torch.optim.AdamW(model.parameters(), lr=0.001, weight_decay=0.01)
+        scheduler = CosineAnnealingLR(optimizer, T_max=epochs)
+        train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True, pin_memory=True, num_workers=4)
 
-# Import your utility functions
-from variant_utils import password_similarity, extract_pattern_clusters, mine_year_patterns, mine_incremental_patterns
-from async_utils import load_passwords
-from cuda_ml import extract_sequence_batch
-
-def find_likely_variants(passwords, similarity_threshold=0.7):
-    """Find passwords that are likely variants of each other in breach data."""
-    variant_pairs = []
-    for i, pw1 in enumerate(passwords):
-        for pw2 in passwords[i+1:]:
-            # Various similarity metrics: Levenshtein distance, common patterns, etc.
-            if password_similarity(pw1, pw2) > similarity_threshold:
-                variant_pairs.append((pw1, pw2))
-    return variant_pairs
-
-def train_self_supervised(model, data_pairs, epochs=5, batch_size=32, lr=0.001, use_amp=True):
-    """
-    Train model using supervised learning from extracted password pairs.
-    
-    Args:
-        model: PyTorch model
-        data_pairs: List of (password1, password2, confidence) tuples
-        epochs: Number of training epochs
-        batch_size: Batch size for training
-        lr: Learning rate
-        use_amp: Whether to use automatic mixed precision
-        
-    Returns:
-        Trained model
-    """
-    if not data_pairs:
-        print("No training pairs provided")
-        return model
-        
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model = model.to(device)
-    model.train()
-    
-    optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=0.01)
-    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-        optimizer, mode='min', factor=0.5, patience=2, verbose=True
-    )
-    
-    # Setup for mixed precision training
-    scaler = GradScaler() if use_amp and torch.cuda.is_available() else None
-    
-    # Convert training data to appropriate format
-    all_pw1 = [pair[0] for pair in data_pairs]
-    all_pw2 = [pair[1] for pair in data_pairs]
-    all_confidences = torch.tensor([pair[2] for pair in data_pairs], 
-                                 dtype=torch.float32, device=device)
-    
-    # Training loop
-    num_batches = (len(data_pairs) + batch_size - 1) // batch_size
-    for epoch in range(epochs):
-        total_loss = 0.0
-        
-        # Shuffle data
-        indices = torch.randperm(len(data_pairs))
-        
-        # Process batches
-        for i in range(num_batches):
-            start_idx = i * batch_size
-            end_idx = min(start_idx + batch_size, len(data_pairs))
-            batch_indices = indices[start_idx:end_idx]
-            
-            # Get batch data
-            batch_pw1 = [all_pw1[idx] for idx in batch_indices]
-            batch_pw2 = [all_pw2[idx] for idx in batch_indices]
-            batch_confidence = all_confidences[batch_indices]
-            
-            # Convert passwords to tensors
-            pw1_tensor, pw2_tensor = extract_sequence_batch(
-                batch_pw1, batch_pw2, device=device
-            )
-            
-            # Forward pass with mixed precision if enabled
-            optimizer.zero_grad()
-            
-            if use_amp and torch.cuda.is_available():
-                with autocast():
-                    # Process both passwords through the model
-                    output1 = model(pw1_tensor)
-                    output2 = model(pw2_tensor)
-                    
-                    # Calculate similarity in output space (cosine similarity)
-                    similarity = F.cosine_similarity(output1, output2)
-                    
-                    # Loss: predicted similarity should match confidence
-                    loss = F.mse_loss(similarity, batch_confidence)
-                
-                # Backward pass with mixed precision
-                scaler.scale(loss).backward()
-                scaler.step(optimizer)
-                scaler.update()
-            else:
-                # Standard training
-                output1 = model(pw1_tensor)
-                output2 = model(pw2_tensor)
-                similarity = F.cosine_similarity(output1, output2)
-                loss = F.mse_loss(similarity, batch_confidence)
-                
+        for epoch in tqdm(range(epochs), desc="Training Epochs"):
+            model.train()
+            for batch in train_loader:
+                var1, var2, target = batch  # Unpack variant pairs and target
+                score1 = model(var1)
+                score2 = model(var2)
+                loss = criterion(score1, score2, target)
+                optimizer.zero_grad()
                 loss.backward()
                 optimizer.step()
-            
-            total_loss += loss.item()
-        
-        # End of epoch
-        avg_loss = total_loss / num_batches
-        print(f"Epoch {epoch+1}/{epochs}, Loss: {avg_loss:.6f}")
-        scheduler.step(avg_loss)
-    
-    # Return trained model
-    model.eval()
-    return model
+            scheduler.step()
+    else:
+        print("Using legacy training logic...")
+        # Legacy training logic here
 
-def train_on_wordlist_self_supervised(model, wordlist_path):
-    """Train model using supervised learning from password wordlist."""
-    passwords = load_passwords(wordlist_path)
-    likely_pairs = find_likely_variants(passwords)
-    
-    for base, variant in likely_pairs:
-        # Train model to predict the transformation between these pairs
-        train_transformation_model(model, base, variant)
-
-def train_transformation_model(model, base, variant, epochs=1):
-    """Train model on a single base-variant pair"""
-    optimizer = torch.optim.Adam(model.parameters(), lr=0.001, weight_decay=0.01)
-    loss_fn = nn.MSELoss()
-    device = next(model.parameters()).device
-    
-    # Import feature extraction here to avoid circular imports
-    from cuda_ml import extract_features
-    
-    # Extract features
-    features = extract_features(variant, base, device=device)
-    
-    # Create a simple target (this would need to be customized for your exact needs)
-    target = torch.ones(6, device=device) * 0.5
-    
-    # Train for a few steps
-    model.train()
-    for _ in range(epochs):
-        optimizer.zero_grad()
-        prediction = model(features)
-        loss = loss_fn(prediction, target)
-        loss.backward()
-        optimizer.step()
-    
-    return model
+# Interactive training with improved UX
+def interactive_training(config, model):
+    print("Welcome to Crackernaut's interactive training mode!")
+    print("You will be shown variants of a base password. Select the ones you think are realistic.")
+    for base_pwd in tqdm(config["base_passwords"], desc="Processing Passwords"):
+        # Example: Generate variants (placeholder logic)
+        variants = [base_pwd + "123", base_pwd + "!"]  # Replace with real variant generation
+        print(f"\nBase: {base_pwd}")
+        for i, var in enumerate(variants):
+            print(f"{i+1}. {var}")
+        choice = input("Enter numbers of realistic variants (e.g., '1 2'): ")
+        # Process user input for training (placeholder)

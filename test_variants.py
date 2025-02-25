@@ -28,3 +28,31 @@ def test_empty_base():
 def test_special_chars():
     variants = generate_variants("!@#", 5, 1)
     assert all(len(v) <= 5 for v in variants)
+
+import unittest
+import torch
+from list_preparer import text_to_tensor, PasswordEmbeddingModel
+from performance_utils import enable_gradient_checkpointing
+from transformer_model import PasswordTransformer
+from variant_utils import generate_variants
+
+class TestCrackernaut(unittest.TestCase):
+    def test_unicode_and_padding(self):
+        passwords = ["üñî", "pass"]
+        tensor = text_to_tensor(passwords, max_length=5, device="cpu", vocab_size=256)
+        self.assertEqual(tensor.shape, (2, 5))
+        self.assertNotEqual(tensor[0][0].item(), 0)  # Check first character mapped
+
+    def test_transformer_model_output(self):
+        model = PasswordTransformer(vocab_size=256, embed_dim=64, num_heads=4, num_layers=3, hidden_dim=128, dropout=0.2, output_dim=6)
+        tensor = text_to_tensor(["password"], max_length=20, device="cpu", vocab_size=256)
+        output = model(tensor)
+        self.assertEqual(output.shape, (1, 6))
+
+    def test_gradient_checkpointing(self):
+        model = PasswordEmbeddingModel()
+        enable_gradient_checkpointing(model)
+        self.assertTrue(hasattr(model, "gradient_checkpointing") and model.gradient_checkpointing)
+
+if __name__ == "__main__":
+    unittest.main()

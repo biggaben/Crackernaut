@@ -1,0 +1,197 @@
+# CRACKERNAUT IMPLEMENTATION STATUS
+
+Below is a complete, revised version of **Crackernaut**, a password variant generation and scoring system. This implementation integrates a lightweight transformer-based model for password embeddings, clusters similar passwords using Mini-Batch K-Means, and enhances the training and generation processes for password variants. It is optimized to handle large datasets (e.g., over 5 billion passwords) efficiently using available hardware such as an RTX 3090 GPU, AMD 5900X CPU, and 32GB RAM.
+
+---
+
+## Revised Crackernaut Implementation
+
+### Overview
+The system is divided into four main components:
+1. **Data Preprocessing and List Preparation**: Load, filter, and cluster the password dataset.
+2. **Main Transformer Integration for Variant Scoring**: Replace traditional scoring with a transformer-based model.
+3. **Configuration and Training**: Set up and train the embedding model.
+4. **Complete Workflow**: Tie everything together into a unified pipeline.
+
+Below is the full implementation with detailed explanations and current status.
+
+---
+
+### 1. Data Preprocessing and List Preparation
+
+**Objective**: Prepare a massive password dataset by deduplicating, filtering, and organizing it into clusters of similar passwords for efficient training and variant scoring.
+
+#### A. Asynchronous Data Loading & Filtering
+- **Purpose**: Load passwords in manageable chunks and remove duplicates/short passwords.
+- **Features**: Asynchronous I/O for speed, filtering for passwords ≥ 4 characters.
+- **Status**: ⚠️ PARTIALLY IMPLEMENTED - Function signature exists in list_preparer.py but lacks complete implementation
+
+```python
+import asyncio
+import aiofiles
+from pathlib import Path
+from typing import List
+
+async def load_password_chunks(file_path: str, chunk_size: int = 1000000) -> List[List[str]]:
+    """Asynchronously load passwords in chunks, deduplicating and filtering short passwords."""
+    passwords = set()
+    async with aiofiles.open(file_path, 'r') as f:
+        chunk = []
+        async for line in f:
+            pwd = line.strip()
+            if len(pwd) >= 4 and pwd not in passwords:
+                chunk.append(pwd)
+                passwords.add(pwd)
+            if len(chunk) >= chunk_size:
+                yield chunk
+                chunk = []
+        if chunk:
+            yield chunk
+```
+
+#### B. Lightweight Transformer for Embeddings
+- **Purpose**: Convert passwords into dense embeddings for clustering and scoring.
+- **Features**: A lightweight transformer encoder with mixed precision for efficiency.
+- **Status**: ❌ NOT IMPLEMENTED - Needs to be added to list_preparer.py
+
+```python
+import torch
+import torch.nn as nn
+from torch.cuda.amp import autocast
+
+class PasswordEmbeddingModel(nn.Module):
+    """Lightweight transformer encoder for password embeddings."""
+    def __init__(self, vocab_size: int = 128, embed_dim: int = 32, num_heads: int = 4, 
+                 num_layers: int = 2, hidden_dim: int = 64, dropout: float = 0.2):
+        super().__init__()
+        self.embedding = nn.Embedding(vocab_size, embed_dim)
+        encoder_layer = nn.TransformerEncoderLayer(
+            d_model=embed_dim, nhead=num_heads, dim_feedforward=hidden_dim, dropout=dropout
+        )
+        self.encoder = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
+    
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        emb = self.embedding(x).transpose(0, 1)  # [seq_len, batch_size, embed_dim]
+        out = self.encoder(emb)                  # [seq_len, batch_size, embed_dim]
+        return out.mean(dim=0)                   # [batch_size, embed_dim]
+
+def text_to_tensor(passwords: List[str], max_length: int = 20, device: str = "cuda") -> torch.Tensor:
+    """Convert a list of passwords to a tensor of character indices."""
+    batch = []
+    for pwd in passwords:
+        indices = [ord(c) % 128 for c in pwd[:max_length]] + [0] * (max_length - len(pwd[:max_length]))
+        batch.append(indices)
+    return torch.tensor(batch, dtype=torch.long, device=device)
+
+def extract_embeddings(model: nn.Module, password_list: List[str], batch_size: int = 1024, device: str = "cuda") -> np.ndarray:
+    """Extract embeddings for a list of passwords in batches."""
+    model.eval()
+    embeddings = []
+    for i in range(0, len(password_list), batch_size):
+        batch = password_list[i:i+batch_size]
+        tensors = text_to_tensor(batch, device=device)
+        with torch.no_grad(), autocast():
+            emb = model(tensors)
+        embeddings.append(emb.cpu().numpy())
+    return np.vstack(embeddings)
+```
+
+#### C. Clustering with Mini-Batch K-Means
+- **Purpose**: Group similar passwords into clusters for efficient processing.
+- **Features**: Mini-Batch K-Means for scalability, set to 10,000 clusters.
+- **Status**: ❌ NOT IMPLEMENTED - Needs to be added to list_preparer.py
+- **Note**: The MiniBatchKMeans class is imported but no implementation exists
+
+```python
+from sklearn.cluster import MiniBatchKMeans
+import numpy as np
+from typing import Tuple, List
+
+def cluster_passwords(embeddings: np.ndarray, n_clusters: int = 10000, batch_size: int = 1000) -> Tuple[np.ndarray, np.ndarray]:
+    """Cluster embeddings using Mini-Batch K-Means."""
+    kmeans = MiniBatchKMeans(n_clusters=n_clusters, batch_size=batch_size, random_state=42)
+    kmeans.fit(embeddings)
+    labels = kmeans.predict(embeddings)
+    return labels, kmeans.cluster_centers_
+
+def process_and_cluster(model: nn.Module, password_chunks: List[List[str]], device: str = "cuda") -> Tuple[np.ndarray, np.ndarray, List[List[str]]:
+    """Process password chunks, extract embeddings, and cluster them incrementally."""
+    all_embeddings = []
+    all_labels = []
+    # BUG: This function doesn't fully implement the logic - it returns variables that aren't populated
+    return labels, embeddings, password_chunks
+```
+
+#### D. Representative Password Selection
+- **Purpose**: Select diverse passwords from each cluster to create a balanced dataset.
+- **Status**: ❌ NOT IMPLEMENTED - Needs to be created
+- **Note**: This functionality is described in README but has no code implementation
+
+### 2. Main Transformer Integration for Variant Scoring
+- **Status**: ❌ NOT IMPLEMENTED - Needs to be created
+- **Note**: The README describes this functionality but no implementation exists
+
+### 3. Configuration and Training
+- **Status**: ❌ NOT IMPLEMENTED - crackernaut_train.py is empty except for shebang line
+- **Note**: README describes multiple training options but none are implemented
+
+### 4. Complete Workflow
+- **Status**: ❌ NOT IMPLEMENTED
+- **Note**: Pipeline integration is missing
+
+## Critical Issues to Address
+
+1. **Memory Management**:
+   - The current approach to handling large datasets needs optimization
+   - ⚠️ Need to implement more efficient chunking strategies
+
+2. **GPU Utilization**:
+   - The transformer model should leverage CUDA more efficiently
+   - ⚠️ Add proper device management and memory optimization
+
+3. **Distributed Training**:
+   - ❌ distributed_training.py needs to be fully implemented
+   - ❌ Add proper synchronization between workers
+
+4. **Bug Fixes**:
+   - ❌ Fix the incomplete process_and_cluster function
+   - ❌ Add proper error handling for all file operations
+   - ⚠️ Address potential memory leaks in embedding generation
+
+5. **Documentation**:
+   - ⚠️ Consolidate README.md and README.txt
+   - ❌ Document clustering parameters and their effects
+
+## Next Steps
+
+1. Complete the list_preparer.py implementation:
+   - Finish the asynchronous loading function
+   - Add the transformer model
+   - Implement clustering functionality
+   - Add representative password selection
+
+2. Implement crackernaut_train.py:
+   - Add training options (bulk, interactive, list preparation)
+   - Implement model training logic
+   - Add evaluation metrics
+
+3. Integrate the components:
+   - Connect list preparation to training
+   - Connect training to variant generation
+   - Optimize the pipeline for efficiency
+
+# Crackernaut
+
+### Ethical and Security Considerations
+- Always obtain explicit permission before using Crackernaut for security testing.
+- Handle password datasets securely, using encryption where necessary, and comply with all applicable data protection laws.
+
+### Usage
+1. Preprocess passwords: `python list_preparer.py --input passwords.txt`
+2. Train the model: `python crackernaut_train.py --config config.json`
+3. Run interactively: `python crackernaut_train.py --interactive`
+
+### Work in Progress
+- List preparation module for organizing password datasets
+- Updated training pipeline for transformer models
+- Improved test coverage

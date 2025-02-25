@@ -5,6 +5,9 @@ cuda_ml.py
 This module implements a CUDA-accelerated machine learning component using PyTorch.
 """
 
+# NOTE: This module implements legacy models (MLP, RNN, BiLSTM). 
+# For transformer-based scoring, refer to transformer_model.py.
+
 import os
 import re
 import torch
