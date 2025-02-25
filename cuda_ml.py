@@ -10,14 +10,16 @@ import re
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from collections import defaultdict
-from typing import List, Tuple, Dict, Set
-import Levenshtein  # pip install python-Levenshtein
-
-MODEL_FILE = "ml_model.pth"
-
+import torch.nn.functional as F
+from typing import List, Tuple
+from variant_utils import (
+    password_similarity, 
+    extract_pattern_clusters, 
+    mine_incremental_patterns, 
+    mine_year_patterns
+)
 INPUT_DIM = 8
-HIDDEN_DIM = 64  # Updated to match intended architecture
+HIDDEN_DIM = 64
 OUTPUT_DIM = 6
 
 class MLP(nn.Module):
@@ -66,19 +68,25 @@ class PasswordRNN(nn.Module):
         Forward pass through the RNN.
         
         Args:
-            x: Tensor of shape (batch_size, seq_len) with character indices
+            x: Tensor of shape (batch_size, seq_len) with character indicess
             
         Returns:
             Tensor of shape (batch_size, output_dim) with modification scores
         """
-        # x shape: (batch_size, seq_len)
         embedded = self.embedding(x)
-        # embedded shape: (batch_size, seq_len, embed_dim)
-        lstm_out, (hidden, _) = self.lstm(embedded)
-        # Use the final hidden state - shape (num_layers, batch_size, hidden_dim)
-        last_hidden = hidden[-1]  # (batch_size, hidden_dim)
-        dropped = self.dropout(last_hidden)
-        output = self.fc(dropped)
+        
+        # Get the full sequence output and hidden states
+        lstm_out, (_, _) = self.lstm(embedded)  # lstm_out: [batch_size, seq_len, hidden_dim]
+        
+        # Apply attention mechanism to lstm_out
+        attn_weights = F.softmax(self.attention(lstm_out).squeeze(-1), dim=1)
+        attn_weights = attn_weights.unsqueeze(-1)  # [batch_size, seq_len, 1]
+        
+        # Create context vector as weighted sum of lstm outputs
+        context = torch.sum(lstm_out * attn_weights, dim=1)  # [batch_size, hidden_dim]
+        
+        # Pass context through final classification layer
+        output = self.fc(context)
         return output
 
 class PasswordBiLSTM(nn.Module):
@@ -88,43 +96,25 @@ class PasswordBiLSTM(nn.Module):
     Provides better understanding of character relationships in both directions
     and focuses on the most relevant parts of the password for predictions.
     """
-    def __init__(self, vocab_size=128, embed_dim=32, hidden_dim=64, output_dim=6, 
-                 num_layers=2, dropout=0.2):
-        super().__init__()
-        self.embedding = nn.Embedding(vocab_size, embed_dim)
-        self.lstm = nn.LSTM(
-            embed_dim, 
-            hidden_dim // 2,  # Half size for each direction
-            num_layers=num_layers, 
-            batch_first=True,
-            bidirectional=True,
-            dropout=dropout if num_layers > 1 else 0
-        )
-        self.attention = nn.Sequential(
-            nn.Linear(hidden_dim, hidden_dim),
-            nn.Tanh(),
-            nn.Linear(hidden_dim, 1, bias=False)
-        )
-        self.dropout = nn.Dropout(dropout)
+    def __init__(self, vocab_size, embedding_dim, hidden_dim, output_dim):
+        super(PasswordBiLSTM, self).__init__()
+        self.embedding = nn.Embedding(vocab_size, embedding_dim)
+        self.lstm = nn.LSTM(embedding_dim, 
+                            hidden_dim // 2,  # Size halved because bidirectional=True doubles it
+                            batch_first=True,
+                            bidirectional=True)
+        
+        self.attention = nn.Linear(hidden_dim, 1)
         self.fc = nn.Linear(hidden_dim, output_dim)
+        self.dropout = nn.Dropout(0.5)
         
     def forward(self, x):
-        # x shape: (batch_size, seq_len)
-        embedded = self.embedding(x)  # (batch_size, seq_len, embed_dim)
-        
-        # Pass through BiLSTM
-        lstm_out, _ = self.lstm(embedded)  # (batch_size, seq_len, hidden_dim)
-        
-        # Apply attention
-        attn_weights = F.softmax(self.attention(lstm_out).squeeze(-1), dim=1)  # (batch_size, seq_len)
-        attn_weights = attn_weights.unsqueeze(-1)  # (batch_size, seq_len, 1)
-        
-        # Compute weighted sum
-        context = torch.sum(lstm_out * attn_weights, dim=1)  # (batch_size, hidden_dim)
-        
-        # Final prediction
-        dropped = self.dropout(context)
-        output = self.fc(dropped)
+        embedded = self.embedding(x)
+        lstm_out, (_, _) = self.lstm(embedded)
+        attn_weights = F.softmax(self.attention(lstm_out).squeeze(-1), dim=1)
+        attn_weights = attn_weights.unsqueeze(-1)
+        context = torch.sum(lstm_out * attn_weights, dim=1)
+        output = self.fc(context)
         return output
 
 def create_parallel_model(model, min_dataset_size=10000):
@@ -143,7 +133,6 @@ def create_parallel_model(model, min_dataset_size=10000):
     else:
         return model.cuda()
 
-# Move model parameters to configuration
 def load_ml_model(config=None, model_type="bilstm"):
     """
     Load the appropriate ML model based on configuration and type.
@@ -393,268 +382,6 @@ def calculate_metrics(preds: torch.Tensor, targets: torch.Tensor):
             "Repetition_MAE": mae[5].item()
         }
 
-def basic_increment(base: str) -> Set[str]:
-    # Implementation
-    if __name__ == "__main__":
-        test_base = "Summer2020"
-        test_variant = "Summer2021!"
-        model = load_ml_model()
-        feats = extract_features(test_variant, test_base)
-        pred = predict_config_adjustment(feats, model)
-        print("Predicted single-value adjustment:", pred)
-        dummy_data = [(test_base, test_variant, 0.1)]
-        model = train_model(dummy_data, model, epochs=3)
-        save_ml_model(model)
-
-def find_likely_variants(passwords, similarity_threshold=0.7):
-    """Find passwords that are likely variants of each other in breach data."""
-    variant_pairs = []
-    for i, pw1 in enumerate(passwords):
-        for pw2 in passwords[i+1:]:
-            # Various similarity metrics: Levenshtein distance, common patterns, etc.
-            if password_similarity(pw1, pw2) > similarity_threshold:
-                variant_pairs.append((pw1, pw2))
-    return variant_pairs
-
-# Implement in train_on_wordlist:
-def train_on_wordlist_self_supervised(model, wordlist_path):
-    passwords = load_passwords(wordlist_path)
-    likely_pairs = find_likely_variants(passwords)
-    
-    for base, variant in likely_pairs:
-        # Train model to predict the transformation between these pairs
-        train_transformation_model(model, base, variant)
-
-def generate_realistic_training_data(passwords):
-    # For passwords that follow common patterns (e.g., word+year, name+number)
-    # Create plausible variants by simulating common user behaviors
-    training_pairs = []
-    for password in passwords:
-        if re.search(r'\d{4}$', password):  # Ends with 4 digits (likely a year)
-            year = int(re.search(r'(\d{4})$', password).group(1))
-            base = password[:-4]
-            variants = [f"{base}{year+1}", f"{base}{year-1}"]
-            training_pairs.extend([(password, variant) for variant in variants])
-    return training_pairs
-
-def score_variants(variants, base, model, config, device):
-    # Get RNN-based scores
-    rnn_scores = get_rnn_scores(variants, base, model, device)
-    
-    # Get traditional rule-based scores
-    rule_scores = get_rule_based_scores(variants, base, config)
-    
-    # Combine scores with configurable weighting
-    alpha = config.get("rnn_weight", 0.7)  # How much to weight the RNN vs rules
-    final_scores = alpha * rnn_scores + (1-alpha) * rule_scores
-    
-    return list(zip(variants, final_scores))
-
-def evaluate_realism(model, test_passwords, human_variant_pairs=None):
-    # Generate variants for test passwords
-    generated_variants = []
-    for password in test_passwords:
-        variants = generate_variants(password, model)
-        generated_variants.append((password, variants))
-    
-    # Compare with known human variants if available
-    if human_variant_pairs:
-        accuracy = compare_with_human_data(generated_variants, human_variant_pairs)
-        print(f"Variant prediction accuracy: {accuracy:.2f}")
-    
-    # Evaluate linguistic realism using n-gram analysis
-    realism_score = linguistic_realism_score(generated_variants)
-    print(f"Linguistic realism score: {realism_score:.2f}")
-
-def extract_pattern_clusters(passwords, min_cluster_size=3, max_sample=100000):
-    """
-    Group passwords by common structural patterns.
-    
-    Args:
-        passwords: List of passwords to analyze
-        min_cluster_size: Minimum number of passwords to form a valid cluster
-        max_sample: Maximum number of passwords to process for memory efficiency
-    
-    Returns:
-        dict: Mapping from patterns to lists of matching passwords
-    """
-    # For large files, take a random sample to keep memory usage reasonable
-    if len(passwords) > max_sample:
-        import random
-        random.seed(42)  # For reproducibility
-        passwords = random.sample(passwords, max_sample)
-    
-    pattern_map = {}
-    
-    for password in passwords:
-        # Create a structural fingerprint (e.g., "LLLDDDS" for "abc123!")
-        pattern = "".join('L' if c.isalpha() else 
-                          'D' if c.isdigit() else 
-                          'S' for c in password)
-        
-        if len(pattern) < 4:  # Skip very short patterns
-            continue
-            
-        if pattern not in pattern_map:
-            pattern_map[pattern] = []
-        pattern_map[pattern].append(password)
-    
-    # Return only patterns with sufficient examples
-    return {k: v for k, v in pattern_map.items() if len(v) >= min_cluster_size}
-
-def find_year_variants(passwords):
-    """Extract year-based password variants which are common in real-world data."""
-    year_base_map = {}
-    year_pattern = re.compile(r'^(.+?)(\d{4})$')
-    
-    for password in passwords:
-        match = year_pattern.match(password)
-        if match:
-            base, year = match.groups()
-            key = base.lower()  # Case-insensitive matching
-            if key not in year_base_map:
-                year_base_map[key] = {}
-            
-            # Group by base, counting occurrences of each year
-            year_base_map[key][year] = year_base_map[key].get(year, 0) + 1
-    
-    # Find bases with multiple years (strong indicator of variants)
-    variants = []
-    for base, years in year_base_map.items():
-        if len(years) >= 2:  # At least two different years for the same base
-            actual_passwords = [f"{base}{year}" for year in years]
-            for i, pw1 in enumerate(actual_passwords):
-                for pw2 in actual_passwords[i+1:]:
-                    variants.append((pw1, pw2, 1.0))  # Third value is confidence
-    
-    return variants
-
-def load_passwords(wordlist_path, max_lines=1000000):
-    """Load password list with reasonable limits."""
-    try:
-        passwords = []
-        with open(wordlist_path, 'r', encoding='utf-8', errors='ignore') as f:
-            for i, line in enumerate(f):
-                if i >= max_lines:
-                    break
-                pw = line.strip()
-                if pw:
-                    passwords.append(pw)
-        return passwords
-    except Exception as e:
-        print(f"Error loading passwords: {e}")
-        return []
-
-def load_passwords(wordlist_path: str, max_count: int = 100000) -> List[str]:
-    """Load passwords from a wordlist file with limit."""
-    try:
-        with open(wordlist_path, 'r', encoding='utf-8', errors='ignore') as f:
-            return [line.strip() for line in f.readlines()[:max_count] if line.strip()]
-    except Exception as e:
-        print(f"Error loading wordlist: {e}")
-        return []
-
-def password_similarity(pw1: str, pw2: str) -> float:
-    """Calculate password similarity using multiple metrics."""
-    # Normalize lengths for comparison
-    max_len = max(len(pw1), len(pw2))
-    if max_len == 0:
-        return 0.0
-        
-    # Calculate Levenshtein (edit) distance similarity
-    edit_similarity = 1.0 - (Levenshtein.distance(pw1, pw2) / max_len)
-    
-    # Calculate character overlap similarity
-    common_chars = set(pw1).intersection(set(pw2))
-    char_similarity = len(common_chars) / len(set(pw1).union(set(pw2))) if pw1 and pw2 else 0
-    
-    # Pattern similarity (e.g. both end with numbers)
-    pattern_similarity = 0.0
-    if re.search(r'\d+$', pw1) and re.search(r'\d+$', pw2):
-        pattern_similarity += 0.2
-    if pw1.lower().startswith(pw2.lower()[:3]) or pw2.lower().startswith(pw1.lower()[:3]):
-        pattern_similarity += 0.2
-        
-    # Combined similarity score (weighted)
-    return (0.5 * edit_similarity) + (0.3 * char_similarity) + (0.2 * pattern_similarity)
-
-def extract_pattern_clusters(passwords: List[str], min_cluster_size: int = 3) -> Dict[str, List[str]]:
-    """Group passwords by common structural patterns."""
-    pattern_map = defaultdict(list)
-    
-    for password in passwords:
-        if not password:
-            continue
-            
-        # Create a structural fingerprint (e.g., "LLLDDDS" for "abc123!")
-        pattern = ''.join('L' if c.isalpha() else 
-                         'D' if c.isdigit() else 
-                         'S' for c in password)
-        
-        # Add length information to the pattern
-        length_pattern = f"{pattern}_{len(password)}"
-        pattern_map[length_pattern].append(password)
-    
-    # Return only patterns with sufficient examples
-    return {k: v for k, v in pattern_map.items() if len(v) >= min_cluster_size}
-
-def mine_year_patterns(passwords: List[str]) -> List[Tuple[str, str]]:
-    """Extract high-confidence training pairs from year patterns."""
-    # Find passwords ending with 4 digits (likely years)
-    year_pattern = re.compile(r'^(.+?)(\d{4})$')
-    
-    # Group by base part
-    password_map = defaultdict(list)
-    for password in passwords:
-        match = year_pattern.match(password)
-        if match:
-            base, year = match.groups()
-            if len(year) == 4 and 1900 <= int(year) <= 2030:  # Validate as plausible year
-                password_map[base].append(year)
-    
-    # Find bases with multiple years (strong indicator of variants)
-    training_pairs = []
-    for base, years in password_map.items():
-        if len(years) >= 2:
-            # Create pairs from each year variant
-            base_passwords = [f"{base}{year}" for year in years]
-            for i, pw1 in enumerate(base_passwords):
-                for pw2 in base_passwords[i+1:]:
-                    training_pairs.append((pw1, pw2))
-    
-    return training_pairs
-
-def mine_incremental_patterns(passwords: List[str]) -> List[Tuple[str, str]]:
-    """Find passwords with incremental number patterns."""
-    training_pairs = []
-    
-    # Group passwords by their alphabetic prefix
-    alpha_groups = defaultdict(list)
-    for password in passwords:
-        match = re.match(r'^([a-zA-Z]+)(\d+)$', password)
-        if match:
-            prefix, number = match.groups()
-            alpha_groups[prefix.lower()].append((password, int(number)))
-    
-    # Find sequential numbers with the same prefix
-    for prefix, pw_numbers in alpha_groups.items():
-        if len(pw_numbers) < 2:
-            continue
-            
-        # Sort by the numeric part
-        pw_numbers.sort(key=lambda x: x[1])
-        
-        # Look for sequential or nearby numbers
-        for i in range(len(pw_numbers) - 1):
-            current_pw, current_num = pw_numbers[i]
-            next_pw, next_num = pw_numbers[i + 1]
-            
-            # Check if numbers are close (e.g., 123 and 124)
-            if 0 < next_num - current_num <= 5:
-                training_pairs.append((current_pw, next_pw))
-    
-    return training_pairs
-
 def generate_realistic_training_data(passwords: List[str]) -> List[Tuple[str, str, float]]:
     """Generate realistic training pairs with confidence scores."""
     training_pairs = []
@@ -687,105 +414,14 @@ def generate_realistic_training_data(passwords: List[str]) -> List[Tuple[str, st
     
     return training_pairs
 
-from torch.cuda.amp import autocast, GradScaler
-
-def train_self_supervised(model, data_pairs, epochs=5, batch_size=32, lr=0.001, use_amp=True):
-    """
-    Train model using self-supervised learning from extracted password pairs.
-    
-    Args:
-        model: PyTorch model
-        data_pairs: List of (password1, password2, confidence) tuples
-        epochs: Number of training epochs
-        batch_size: Batch size for training
-        lr: Learning rate
-        use_amp: Whether to use automatic mixed precision
-        
-    Returns:
-        Trained model
-    """
-    if not data_pairs:
-        print("No training pairs provided")
-        return model
-        
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model = model.to(device)
-    model.train()
-    
-    optimizer = torch.optim.Adam(model.parameters(), lr=lr)
-    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-        optimizer, mode='min', factor=0.5, patience=2, verbose=True
-    )
-    
-    # Setup for mixed precision training
-    scaler = GradScaler() if use_amp and torch.cuda.is_available() else None
-    
-    # Convert training data to appropriate format
-    all_pw1 = [pair[0] for pair in data_pairs]
-    all_pw2 = [pair[1] for pair in data_pairs]
-    all_confidences = torch.tensor([pair[2] for pair in data_pairs], 
-                                 dtype=torch.float32, device=device)
-    
-    # Training loop
-    num_batches = (len(data_pairs) + batch_size - 1) // batch_size
-    for epoch in range(epochs):
-        total_loss = 0.0
-        
-        # Shuffle data
-        indices = torch.randperm(len(data_pairs))
-        
-        # Process batches
-        for i in range(num_batches):
-            start_idx = i * batch_size
-            end_idx = min(start_idx + batch_size, len(data_pairs))
-            batch_indices = indices[start_idx:end_idx]
-            
-            # Get batch data
-            batch_pw1 = [all_pw1[idx] for idx in batch_indices]
-            batch_pw2 = [all_pw2[idx] for idx in batch_indices]
-            batch_confidence = all_confidences[batch_indices]
-            
-            # Convert passwords to tensors
-            pw1_tensor, pw2_tensor = extract_sequence_batch(
-                batch_pw1, batch_pw2, device=device
-            )
-            
-            # Forward pass with mixed precision if enabled
-            optimizer.zero_grad()
-            
-            if use_amp and torch.cuda.is_available():
-                with autocast():
-                    # Process both passwords through the model
-                    output1 = model(pw1_tensor)
-                    output2 = model(pw2_tensor)
-                    
-                    # Calculate similarity in output space (cosine similarity)
-                    similarity = F.cosine_similarity(output1, output2)
-                    
-                    # Loss: predicted similarity should match confidence
-                    loss = F.mse_loss(similarity, batch_confidence)
-                
-                # Backward pass with mixed precision
-                scaler.scale(loss).backward()
-                scaler.step(optimizer)
-                scaler.update()
-            else:
-                # Standard training
-                output1 = model(pw1_tensor)
-                output2 = model(pw2_tensor)
-                similarity = F.cosine_similarity(output1, output2)
-                loss = F.mse_loss(similarity, batch_confidence)
-                
-                loss.backward()
-                optimizer.step()
-            
-            total_loss += loss.item()
-        
-        # End of epoch
-        avg_loss = total_loss / num_batches
-        print(f"Epoch {epoch+1}/{epochs}, Loss: {avg_loss:.6f}")
-        scheduler.step(avg_loss)
-    
-    # Return trained model
-    model.eval()
-    return model
+if __name__ == "__main__":
+    test_base = "Summer2020"
+    test_variant = "Summer2021!"
+    model = load_ml_model()
+    feats = extract_features(test_variant, test_base)
+    pred = predict_config_adjustment(feats, model)
+    print("Predicted single-value adjustment:", pred)
+    dummy_data = [(test_base, test_variant, {"Numeric": 0.1, "Symbol": 0.1, "Capitalization": 0.1, 
+                                        "Leet": 0.1, "Shift": 0.1, "Repetition": 0.1})]
+    model = train_model(dummy_data, model, epochs=3)
+    save_ml_model(model)

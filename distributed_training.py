@@ -1,9 +1,19 @@
 import os
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data import DataLoader, DistributedSampler, Dataset
+import json
+import re
+from typing import Set
+
+PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
+CONFIG_FILE = os.path.join(PROJECT_ROOT, "config.json")
+DEFAULT_CONFIG = {
+    # ... rest of the DEFAULT_CONFIG
+}
 
 def setup_distributed(rank, world_size):
     """
@@ -23,7 +33,7 @@ def cleanup_distributed():
     dist.destroy_process_group()
 
 def train_distributed(rank, world_size, model, dataset, epochs=10, batch_size=32, 
-                     learning_rate=0.001, save_path=None):
+                     learning_rate=0.001, weight_decay=1e-4, save_path=None):
     """
     Train model using distributed data parallelism
     
@@ -60,7 +70,7 @@ def train_distributed(rank, world_size, model, dataset, epochs=10, batch_size=32
     
     # Set up optimizer with learning rate scaling
     # Scale learning rate by number of processes (GPUs)
-    optimizer = torch.optim.Adam(ddp_model.parameters(), lr=learning_rate * world_size)
+    optimizer = torch.optim.Adam(ddp_model.parameters(), lr=learning_rate * world_size, weight_decay=weight_decay)
     
     # Training loop
     for epoch in range(epochs):
@@ -131,8 +141,7 @@ def run_distributed_training(model_class, dataset, num_gpus, **kwargs):
         print("Distributed training requires multiple GPUs. Falling back to single GPU training.")
         device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
         model = model_class().to(device)
-        # Call your regular training function here
-        return
+        return train_single_gpu(model, dataset, **kwargs)
     
     # Launch processes
     mp.spawn(
@@ -141,3 +150,66 @@ def run_distributed_training(model_class, dataset, num_gpus, **kwargs):
         nprocs=num_gpus,
         join=True
     )
+
+def train_single_gpu(model, dataset, epochs=10, batch_size=32, learning_rate=0.001, 
+                    weight_decay=1e-4, save_path=None):
+    """
+    Train model using a single GPU or CPU when distributed training isn't available
+    
+    Args:
+        model: Model to train
+        dataset: Training dataset
+        epochs: Number of epochs
+        batch_size: Batch size
+        learning_rate: Learning rate
+        weight_decay: Weight decay parameter
+        save_path: Path to save the model
+    """
+    device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
+    model = model.to(device)
+    
+    # Create standard dataloader (no distributed sampler needed)
+    dataloader = DataLoader(
+        dataset, 
+        batch_size=batch_size,
+        shuffle=True,
+        num_workers=2,
+        pin_memory=torch.cuda.is_available()
+    )
+    
+    # Set up optimizer (no learning rate scaling needed)
+    optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
+    
+    # Training loop (similar to distributed but simpler)
+    for epoch in range(epochs):
+        model.train()
+        total_loss = 0.0
+        
+        for i, (inputs, targets) in enumerate(dataloader):
+            # Move data to device
+            inputs = inputs.to(device)
+            targets = targets.to(device)
+            
+            # Forward pass
+            outputs = model(inputs)
+            loss = compute_loss(outputs, targets)
+            
+            # Backward and optimize
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+            
+            total_loss += loss.item()
+            
+            if i % 10 == 0:
+                print(f"Epoch [{epoch+1}/{epochs}], Step [{i+1}/{len(dataloader)}], "
+                     f"Loss: {loss.item():.4f}")
+        
+        # Print epoch summary
+        print(f"Epoch [{epoch+1}/{epochs}], Average Loss: {total_loss / len(dataloader):.4f}")
+    
+    # Save model
+    if save_path:
+        torch.save(model.state_dict(), save_path)
+    
+    return model

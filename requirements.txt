@@ -2,3 +2,4 @@ numpy>=2.2.3
 tqdm>=4.67.1
 pycuda>=2025.1
 ax-platform>=0.4.1
+python-Levenshtein>=0.26.1

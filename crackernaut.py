@@ -20,7 +20,6 @@ Usage:
 import argparse
 import os
 import re
-import sys
 import torch
 from config_utils import load_configuration
 from variant_utils import generate_variants, SYMBOLS
@@ -122,9 +121,21 @@ class VariantPipeline:
                 try:
                     # Process variant
                     with torch.no_grad():
-                        features = extract_features(variant, self.base, self.config['feature_config'])
+                        # For weights, use the modification_weights from the config
+                        weights = [
+                            self.config["modification_weights"]["Numeric"],
+                            self.config["modification_weights"]["Symbol"],
+                            self.config["modification_weights"]["Capitalization"],
+                            self.config["modification_weights"]["Leet"],
+                            self.config["modification_weights"]["Shift"],
+                            self.config["modification_weights"]["Repetition"]
+                        ]
+                        weights_tensor = torch.tensor(weights, dtype=torch.float32, device=self.device).view(-1, 1)
+
+                        # Instead of config['feature_config'] pass a default value
+                        features = extract_features(variant, self.base, device=self.device)
                         features_tensor = features.to(self.device)
-                        score = float((self.model(features_tensor.unsqueeze(0)) @ self.weights).item())
+                        score = float((self.model(features_tensor.unsqueeze(0)) @ weights_tensor).item())
                     
                     # Store result
                     self.result_queue.put((variant, score))
@@ -228,7 +239,14 @@ def score_variants_optimized(variants, base, model, config, device=None):
     model.eval()
     
     # Get config weights
-    weights = torch.tensor(config['weights'], dtype=torch.float32, device=device).view(-1, 1)
+    weights = torch.tensor([
+        config["modification_weights"]["Numeric"],
+        config["modification_weights"]["Symbol"],
+        config["modification_weights"]["Capitalization"],
+        config["modification_weights"]["Leet"],
+        config["modification_weights"]["Shift"],
+        config["modification_weights"]["Repetition"]
+    ], dtype=torch.float32, device=device).view(-1, 1)
     
     # Process variants in batches
     scored_variants = []
@@ -239,7 +257,7 @@ def score_variants_optimized(variants, base, model, config, device=None):
             # Extract features for entire batch
             batch_features = []
             for variant in batch:
-                features = extract_features(variant, base, config['feature_config'])
+                features = extract_features(variant, base, device=device)
                 batch_features.append(features)
             
             # Convert to tensor and process
@@ -341,17 +359,16 @@ def process_password_batch(passwords, model, config, device):
     
     return results
 
-# Helper functions (implement according to your existing code)
 def extract_features_for_wordlist(password, config):
     """Extract features from password for wordlist processing"""
-    # Implement feature extraction logic based on your existing code
-    # This is a placeholder
-    return torch.zeros(config['feature_size'])
+    # Create a dummy base password for feature extraction
+    base = password[:len(password)//2] if len(password) > 4 else "password"
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    return extract_features(password, base, device=device)
 
 def process_model_output(password, output, config):
     """Process model output for a password"""
-    # Implement output processing logic
-    # This is a placeholder
+    # Sum the outputs and convert to a score
     score = float(output.sum().item())
     return (password, score)
 

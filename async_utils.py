@@ -134,3 +134,14 @@ async def async_process_directory(
             results[filename] = None
     
     return results
+
+from typing import List
+
+def load_passwords(wordlist_path: str, max_count: int = 100000) -> List[str]:
+    """Load passwords from a wordlist file with limit."""
+    try:
+        with open(wordlist_path, 'r', encoding='utf-8', errors='ignore') as f:
+            return [line.strip() for line in f.readlines()[:max_count] if line.strip()]
+    except Exception as e:
+        print(f"Error loading wordlist: {e}")
+        return []

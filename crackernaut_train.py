@@ -26,8 +26,10 @@ import os
 import random
 import time
 import logging
-from typing import List, Tuple, Optional
+import torch
+import torch.nn.functional as F
 
+from typing import List, Tuple, Optional
 from tqdm import tqdm
 from config_utils import load_configuration as load_config_from_utils
 from config_utils import save_configuration as save_config_from_utils
@@ -49,7 +51,7 @@ from cuda_ml import (
     train_self_supervised,
     create_parallel_model
 )
-import torch
+
 
 # Configure logging
 logging.basicConfig(
@@ -171,7 +173,7 @@ def bulk_train_on_wordlist(wordlist_path: str, config: dict, model, iterations: 
     # Setup optimizer based on model type
     device = next(model.parameters()).device
     learning_rate = config.get("learning_rate", 0.01)
-    optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
+    optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate, weight_decay=0.01)
     
     # Use appropriate batch size based on model type
     batch_size = 32 if isinstance(model, PasswordRNN) else 64
@@ -528,8 +530,8 @@ def main():
     parser.add_argument("-v", "--verbose", action="store_true", help="Enable verbose logging")
     parser.add_argument("--model", type=str, choices=["mlp", "rnn"], default="rnn",
                         help="Model architecture to use (mlp or rnn)")
-    parser.add_argument("--self-supervised", action="store_true", 
-                        help="Use self-supervised learning on wordlist")
+    parser.add_argument("--supervised", action="store_true", 
+                        help="Use supervised learning on wordlist")
     parser.add_argument("--model-type", type=str, choices=["mlp", "rnn", "bilstm"],
                         default="bilstm", help="Type of model architecture")
     args = parser.parse_args()
@@ -615,9 +617,9 @@ def main():
                 save_ml_model(model, model_type=args.model)
                 save_config_from_utils(config)
 
-    if args.wordlist and args.self-supervised:
+    if args.wordlist and args.supervised:
         try:
-            logger.info("Loading passwords for self-supervised training...")
+            logger.info("Loading passwords for supervised training...")
             passwords = load_passwords(wordlist_path, max_count=500000)
             logger.info(f"Loaded {len(passwords)} passwords")
             
@@ -638,8 +640,8 @@ def main():
             # Use parallel training if available
             model = create_parallel_model(model, min_dataset_size=len(training_pairs))
             
-            # Train with self-supervised learning
-            logger.info("Starting self-supervised training...")
+            # Train with supervised learning
+            logger.info("Starting supervised training...")
             model = train_self_supervised(
                 model, 
                 training_pairs,
@@ -650,10 +652,10 @@ def main():
             
             # Save the model
             save_ml_model(model, model_type=args.model_type)
-            logger.info("Self-supervised training complete")
+            logger.info("supervised training complete")
             
         except Exception as e:
-            logger.error(f"Error during self-supervised training: {e}", exc_info=True)
+            logger.error(f"Error during supervised training: {e}", exc_info=True)
 
     if args.interactive:
         logger.info("Starting interactive session")
@@ -706,3 +708,212 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+def train_on_selected_variants(selected_variants, base_password, model, config):
+    """
+    Train the model on user-selected variants.
+    
+    Args:
+        selected_variants: List of selected variant passwords
+        base_password: Original base password
+        model: PyTorch model
+        config: Configuration dictionary
+    """
+    if not selected_variants:
+        return
+    
+    device = next(model.parameters()).device
+    
+    # Create optimizer
+    optimizer = torch.optim.Adam(model.parameters(), lr=config.get("learning_rate", 0.01), weight_decay=0.01)
+    
+    # Training loop
+    model.train()
+    for variant in selected_variants:
+        # Extract features based on model type
+        if isinstance(model, PasswordRNN) or isinstance(model, PasswordBiLSTM):
+            var_tensor, _ = extract_sequence_features(variant, base_password, device=device)
+            # Simplified target: higher values for selected variants
+            target = torch.ones(6, device=device) * 0.8
+            
+            # Forward pass, loss and optimization
+            optimizer.zero_grad()
+            prediction = model(var_tensor)
+            loss = F.mse_loss(prediction[0], target)
+            loss.backward()
+            optimizer.step()
+        else:
+            # MLP model
+            features = extract_features(variant, base_password, device=device)
+            target = torch.ones(6, device=device) * 0.8
+            
+            optimizer.zero_grad()
+            prediction = model(features)
+            loss = F.mse_loss(prediction[0], target)
+            loss.backward()
+            optimizer.step()
+        
+        # Update config weights based on new model outputs
+        rating_dict = predict_adjustments(variant, base_password, model)
+        update_config_with_rating(config, rating_dict)
+    
+    # Set model back to evaluation mode
+    model.eval()
+
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+from torch.cuda.amp import autocast, GradScaler
+from typing import List, Tuple, Set
+import os
+
+# Import your utility functions
+from variant_utils import password_similarity, extract_pattern_clusters, mine_year_patterns, mine_incremental_patterns
+from async_utils import load_passwords
+from cuda_ml import extract_sequence_batch
+
+def find_likely_variants(passwords, similarity_threshold=0.7):
+    """Find passwords that are likely variants of each other in breach data."""
+    variant_pairs = []
+    for i, pw1 in enumerate(passwords):
+        for pw2 in passwords[i+1:]:
+            # Various similarity metrics: Levenshtein distance, common patterns, etc.
+            if password_similarity(pw1, pw2) > similarity_threshold:
+                variant_pairs.append((pw1, pw2))
+    return variant_pairs
+
+def train_self_supervised(model, data_pairs, epochs=5, batch_size=32, lr=0.001, use_amp=True):
+    """
+    Train model using supervised learning from extracted password pairs.
+    
+    Args:
+        model: PyTorch model
+        data_pairs: List of (password1, password2, confidence) tuples
+        epochs: Number of training epochs
+        batch_size: Batch size for training
+        lr: Learning rate
+        use_amp: Whether to use automatic mixed precision
+        
+    Returns:
+        Trained model
+    """
+    if not data_pairs:
+        print("No training pairs provided")
+        return model
+        
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    model = model.to(device)
+    model.train()
+    
+    optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=0.01)
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+        optimizer, mode='min', factor=0.5, patience=2, verbose=True
+    )
+    
+    # Setup for mixed precision training
+    scaler = GradScaler() if use_amp and torch.cuda.is_available() else None
+    
+    # Convert training data to appropriate format
+    all_pw1 = [pair[0] for pair in data_pairs]
+    all_pw2 = [pair[1] for pair in data_pairs]
+    all_confidences = torch.tensor([pair[2] for pair in data_pairs], 
+                                 dtype=torch.float32, device=device)
+    
+    # Training loop
+    num_batches = (len(data_pairs) + batch_size - 1) // batch_size
+    for epoch in range(epochs):
+        total_loss = 0.0
+        
+        # Shuffle data
+        indices = torch.randperm(len(data_pairs))
+        
+        # Process batches
+        for i in range(num_batches):
+            start_idx = i * batch_size
+            end_idx = min(start_idx + batch_size, len(data_pairs))
+            batch_indices = indices[start_idx:end_idx]
+            
+            # Get batch data
+            batch_pw1 = [all_pw1[idx] for idx in batch_indices]
+            batch_pw2 = [all_pw2[idx] for idx in batch_indices]
+            batch_confidence = all_confidences[batch_indices]
+            
+            # Convert passwords to tensors
+            pw1_tensor, pw2_tensor = extract_sequence_batch(
+                batch_pw1, batch_pw2, device=device
+            )
+            
+            # Forward pass with mixed precision if enabled
+            optimizer.zero_grad()
+            
+            if use_amp and torch.cuda.is_available():
+                with autocast():
+                    # Process both passwords through the model
+                    output1 = model(pw1_tensor)
+                    output2 = model(pw2_tensor)
+                    
+                    # Calculate similarity in output space (cosine similarity)
+                    similarity = F.cosine_similarity(output1, output2)
+                    
+                    # Loss: predicted similarity should match confidence
+                    loss = F.mse_loss(similarity, batch_confidence)
+                
+                # Backward pass with mixed precision
+                scaler.scale(loss).backward()
+                scaler.step(optimizer)
+                scaler.update()
+            else:
+                # Standard training
+                output1 = model(pw1_tensor)
+                output2 = model(pw2_tensor)
+                similarity = F.cosine_similarity(output1, output2)
+                loss = F.mse_loss(similarity, batch_confidence)
+                
+                loss.backward()
+                optimizer.step()
+            
+            total_loss += loss.item()
+        
+        # End of epoch
+        avg_loss = total_loss / num_batches
+        print(f"Epoch {epoch+1}/{epochs}, Loss: {avg_loss:.6f}")
+        scheduler.step(avg_loss)
+    
+    # Return trained model
+    model.eval()
+    return model
+
+def train_on_wordlist_self_supervised(model, wordlist_path):
+    """Train model using supervised learning from password wordlist."""
+    passwords = load_passwords(wordlist_path)
+    likely_pairs = find_likely_variants(passwords)
+    
+    for base, variant in likely_pairs:
+        # Train model to predict the transformation between these pairs
+        train_transformation_model(model, base, variant)
+
+def train_transformation_model(model, base, variant, epochs=1):
+    """Train model on a single base-variant pair"""
+    optimizer = torch.optim.Adam(model.parameters(), lr=0.001, weight_decay=0.01)
+    loss_fn = nn.MSELoss()
+    device = next(model.parameters()).device
+    
+    # Import feature extraction here to avoid circular imports
+    from cuda_ml import extract_features
+    
+    # Extract features
+    features = extract_features(variant, base, device=device)
+    
+    # Create a simple target (this would need to be customized for your exact needs)
+    target = torch.ones(6, device=device) * 0.5
+    
+    # Train for a few steps
+    model.train()
+    for _ in range(epochs):
+        optimizer.zero_grad()
+        prediction = model(features)
+        loss = loss_fn(prediction, target)
+        loss.backward()
+        optimizer.step()
+    
+    return model

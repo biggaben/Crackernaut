@@ -1,10 +1,11 @@
 # Predefined Wordlists and directories
 SecLists-master/
-training_data.txt
 config.json
 ml_model.pth
 *.code-workspace
 .gitattributes
+rockyou*
+trainingdata/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

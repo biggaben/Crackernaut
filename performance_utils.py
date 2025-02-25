@@ -2,6 +2,7 @@
 import os
 import torch
 import logging
+import torch.nn.functional as F
 from typing import Dict, List, Optional, Tuple, Any
 
 def get_optimal_workers() -> int:

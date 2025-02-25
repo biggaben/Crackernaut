@@ -1,7 +1,7 @@
 # test_variants.py
 from variant_utils import (
     chain_shift_variants, 
-    generate_basic_variants, 
+    generate_variants,
     generate_variants
 )
 
@@ -9,7 +9,7 @@ def test_shift_variants():
     assert "123abc" in chain_shift_variants("abc123")
 
 def test_leet_substitution():
-    assert "P@ssword" in generate_basic_variants("Password")
+    assert "P@ssword" in generate_variants("Password")
 
 def test_complex_variants():
     variants = generate_variants("Password123", 20, 2)
