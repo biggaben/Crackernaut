@@ -1,7 +1,7 @@
 import json
 import os
 
-CONFIG_FILE = "config.json"
+CONFIG_FILE = os.path.join(PROJECT_ROOT, "config.json")
 PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_CONFIG = {
     "modification_weights": {

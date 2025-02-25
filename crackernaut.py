@@ -25,6 +25,7 @@ import torch
 from config_utils import load_configuration
 from variant_utils import generate_variants, SYMBOLS
 from cuda_ml import load_ml_model, extract_features, predict_config_adjustment
+from tqdm import tqdm
 
 def score_variants(variants, base, model, config, device):
     if not variants:
@@ -81,7 +82,8 @@ def main():
         print("No variants generated. Try adjusting the configuration.")
         return
     
-    # Score the generated variants using the ML model
+    # Add progress indication for variant generation
+    print(f"Scoring {len(variants)} variants...")
     scored_variants = score_variants(variants, base, model, config, device)
     
     if not scored_variants:
