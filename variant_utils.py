@@ -13,6 +13,8 @@ from cuda_ml import extract_features, MLP
 from config_utils import PROJECT_ROOT as PROJECT_ROOT
 from collections import deque
 from typing import List
+from concurrent.futures import ProcessPoolExecutor
+from functools import partial
 
 SYMBOLS = ["!", "@", "#", "$", "%", "^", "&", "*", "?", "-", "+"]
 
@@ -132,6 +134,65 @@ def generate_human_chains(base: str) -> set:
     for transform in TRANSFORMATIONS.values():
         chains.update(transform(base))
     return chains
+
+def generate_variants_parallel(base, max_length=20, chain_depth=5, num_workers=None):
+    """
+    Generate password variants using multiple CPU cores for improved performance.
+    
+    Args:
+        base: Base password to generate variants from
+        max_length: Maximum length of variants to consider
+        chain_depth: Maximum depth of transformation chains
+        num_workers: Number of worker processes (defaults to CPU count)
+    
+    Returns:
+        List of unique password variants
+    """
+    if num_workers is None:
+        num_workers = max(1, os.cpu_count() - 1)  # Leave one core free for system
+    
+    # Create partial functions with fixed arguments
+    def process_transforms(transform_keys, base=base, max_length=max_length, chain_depth=chain_depth):
+        variants = set()
+        for key in transform_keys:
+            transform_fn = TRANSFORMATIONS[key]
+            # Apply each transformation to the base password
+            for variant in transform_fn(base, max_length):
+                if variant and len(variant) <= max_length:
+                    variants.add(variant)
+                    
+                    # Apply recursive chains if depth allows
+                    if chain_depth > 1:
+                        for chain_variant in _generate_chain_variants(variant, max_length, chain_depth-1):
+                            variants.add(chain_variant)
+        
+        return list(variants)
+    
+    # Split transformation keys across workers
+    transform_keys = list(TRANSFORMATIONS.keys())
+    chunk_size = max(1, len(transform_keys) // num_workers)
+    transform_chunks = [transform_keys[i:i+chunk_size] for i in range(0, len(transform_keys), chunk_size)]
+    
+    # Process in parallel
+    all_variants = set([base])  # Include the original password
+    with ProcessPoolExecutor(max_workers=num_workers) as executor:
+        for result in executor.map(process_transforms, transform_chunks):
+            all_variants.update(result)
+    
+    return list(all_variants)
+
+# Helper function to maintain compatibility with existing code
+def _generate_chain_variants(base, max_length, depth):
+    # Similar to original chain variant logic but simplified
+    variants = set()
+    for key, transform_fn in TRANSFORMATIONS.items():
+        for variant in transform_fn(base, max_length):
+            if variant and len(variant) <= max_length:
+                variants.add(variant)
+                if depth > 1:
+                    for subvariant in _generate_chain_variants(variant, max_length, depth-1):
+                        variants.add(subvariant)
+    return variants
 
 ########################################
 # Machine Learning Integration
