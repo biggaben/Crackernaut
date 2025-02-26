@@ -3,3 +3,6 @@ tqdm>=4.67.1
 pycuda>=2025.1
 ax-platform>=0.4.1
 python-Levenshtein>=0.26.1
+torch>=1.9.0
+aiofiles>=0.7.0
+scikit-learn>=1.0.0

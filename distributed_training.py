@@ -11,9 +11,6 @@ from typing import Set
 
 PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
 CONFIG_FILE = os.path.join(PROJECT_ROOT, "config.json")
-DEFAULT_CONFIG = {
-    # ... rest of the DEFAULT_CONFIG
-}
 
 def setup_distributed(rank, world_size):
     """
@@ -23,10 +20,14 @@ def setup_distributed(rank, world_size):
         rank: Current process rank
         world_size: Total number of processes
     """
-    os.environ['MASTER_ADDR'] = 'localhost'
-    os.environ['MASTER_PORT'] = '12355'
-    dist.init_process_group("nccl", rank=rank, world_size=world_size)
-    torch.cuda.set_device(rank)
+    try:
+        os.environ['MASTER_ADDR'] = 'localhost'
+        os.environ['MASTER_PORT'] = '12355'
+        dist.init_process_group("nccl", rank=rank, world_size=world_size)
+        torch.cuda.set_device(rank)
+    except Exception as e:
+        print(f"Error setting up distributed training: {e}")
+        raise
 
 def cleanup_distributed():
     """Cleanup distributed training resources"""
@@ -59,7 +60,7 @@ def train_distributed(rank, world_size, model, dataset, epochs=10, batch_size=32
     
     # Create distributed sampler and dataloader
     sampler = DistributedSampler(dataset, num_replicas=world_size, rank=rank, 
-                                shuffle=True, drop_last=False)
+                                shuffle=True)
     dataloader = DataLoader(
         dataset, 
         batch_size=batch_size,
@@ -81,7 +82,7 @@ def train_distributed(rank, world_size, model, dataset, epochs=10, batch_size=32
         ddp_model.train()
         total_loss = 0.0
         
-        for i, (inputs, targets) in enumerate(dataloader):
+        for inputs, targets in dataloader:
             # Move data to device
             inputs = inputs.to(device)
             targets = targets.to(device)
@@ -96,14 +97,10 @@ def train_distributed(rank, world_size, model, dataset, epochs=10, batch_size=32
             optimizer.step()
             
             total_loss += loss.item()
-            
-            if rank == 0 and i % 10 == 0:
-                print(f"Epoch [{epoch+1}/{epochs}], Step [{i+1}/{len(dataloader)}], "
-                     f"Loss: {loss.item():.4f}")
         
         # Print epoch summary
         if rank == 0:
-            print(f"Epoch [{epoch+1}/{epochs}], Average Loss: {total_loss / len(dataloader):.4f}")
+            print(f"Epoch {epoch+1}: Avg Loss {total_loss/len(dataloader):.4f}")
     
     # Save model (only on rank 0)
     if rank == 0 and save_path:
@@ -133,9 +130,7 @@ def run_distributed_training(model_class, dataset, num_gpus, **kwargs):
     
     # Check available GPU count
     available_gpus = torch.cuda.device_count()
-    if available_gpus < num_gpus:
-        print(f"Warning: Requested {num_gpus} GPUs but only {available_gpus} available")
-        num_gpus = available_gpus
+    num_gpus = min(num_gpus, available_gpus)
     
     if num_gpus <= 1:
         print("Distributed training requires multiple GPUs. Falling back to single GPU training.")
@@ -213,3 +208,36 @@ def train_single_gpu(model, dataset, epochs=10, batch_size=32, learning_rate=0.0
         torch.save(model.state_dict(), save_path)
     
     return model
+
+def load_config(config_file):
+    with open(config_file, 'r') as f:
+        return json.load(f)
+
+def load_dataset(dataset_path):
+    try:
+        return CustomDataset(dataset_path)
+    except Exception as e:
+        print(f"Error loading dataset: {e}")
+        raise
+
+def main():
+    config = load_config(CONFIG_FILE)
+    model_class = globals().get(config["model_class"])
+    if model_class is None:
+        raise ValueError(f"Model class {config['model_class']} not found.")
+    model = model_class()
+    dataset = load_dataset(config["dataset_path"])
+
+    run_distributed_training(
+        model_class=model_class,
+        dataset=dataset,
+        num_gpus=config["num_gpus"],
+        epochs=config["epochs"],
+        batch_size=config["batch_size"],
+        learning_rate=config["learning_rate"],
+        weight_decay=config["weight_decay"],
+        save_path=config["save_path"]
+    )
+
+if __name__ == "__main__":
+    main()

@@ -6,7 +6,11 @@ ml_model.pth
 .gitattributes
 rockyou*
 trainingdata/
-
+clusters/*
+models/embedding/*
+models/mlp/*
+models/rnn/*
+models/transformer/*
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
