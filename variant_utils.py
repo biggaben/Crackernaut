@@ -10,12 +10,12 @@ import torch.nn.functional as F
 from typing import List, Set, Dict, Tuple, Callable
 from ax.service.ax_client import AxClient, ObjectiveProperties
 from ax.utils.measurement.synthetic_functions import branin
-from cuda_ml import extract_features, MLP
 from config_utils import PROJECT_ROOT as PROJECT_ROOT
 from collections import deque
 from typing import List
 from concurrent.futures import ProcessPoolExecutor
 from functools import partial
+from common_utils import extract_features, MLP
 
 SYMBOLS = ["!", "@", "#", "$", "%", "^", "&", "*", "?", "-", "+"]
 
@@ -56,7 +56,8 @@ def _chain_leet_substitution(base: str) -> Set[str]:
     variants = set()
     for i, ch in enumerate(base.lower()):
         if ch in mapping:
-            variants.add(f"{base[:i]}{random.choice(mapping[ch])}{base[i+1:]}")
+            for sub in mapping[ch]:
+                variants.add(f"{base[:i]}{sub}{base[i+1:]}")
     return variants
 
 def chain_shift_variants(base: str) -> Set[str]:
@@ -74,6 +75,8 @@ def _chain_middle_insertion(base: str) -> Set[str]:
     return variants
 
 def _chain_repetition_variants(base: str) -> Set[str]:
+    if not base:
+        return set()  # Handle empty base case
     return {f"{base}{base[-1]}", f"{base}!!"} | {f"{sym*2}{base}" for sym in SYMBOLS}
 
 ########################################
@@ -90,37 +93,60 @@ TRANSFORMATIONS = {
     "middle_insertion": _chain_middle_insertion
 }
 
-def generate_variants(base: str, max_length: int, chain_depth: int) -> List[str]:
+def generate_variants(base: str, max_length: int, chain_depth: int, parallel: bool = False, num_workers: int = None) -> List[str]:
     """
-    Generate password variants iteratively up to a specified chain depth.
+    Generate password variants iteratively or in parallel up to a specified chain depth.
 
     Args:
         base (str): Base password.
         max_length (int): Maximum length of variants.
         chain_depth (int): Maximum transformation depth.
+        parallel (bool): If True, use parallel processing; otherwise, use single-threaded BFS.
+        num_workers (int): Number of worker processes for parallel mode (defaults to CPU count - 1).
 
     Returns:
         List[str]: List of unique variants.
     """
-
-    variants = set()
-    queue = deque([(base, 0)])  # (variant, depth)
-    seen = {base}
-
-    while queue:
-        current, depth = queue.popleft()
-        if depth > chain_depth:
-            continue
-        if len(current) <= max_length:
-            variants.add(current)
-
-        for transform in TRANSFORMATIONS.values():
-            for var in transform(current):
-                if var not in seen and len(var) <= max_length:
-                    seen.add(var)
-                    queue.append((var, depth + 1))
-
-    return list(variants)
+    if parallel:
+        if num_workers is None:
+            num_workers = max(1, os.cpu_count() - 1)
+        
+        def process_transforms(keys):
+            variants = set()
+            for key in keys:
+                for var in TRANSFORMATIONS[key](base):
+                    if len(var) <= max_length:
+                        variants.add(var)
+                        if chain_depth > 1:
+                            variants.update(_generate_chain_variants(var, max_length, chain_depth - 1))
+            return variants
+        
+        transform_keys = list(TRANSFORMATIONS.keys())
+        chunk_size = max(1, len(transform_keys) // num_workers)
+        chunks = [transform_keys[i:i + chunk_size] for i in range(0, len(transform_keys), chunk_size)]
+        
+        all_variants = set([base])
+        with ProcessPoolExecutor(max_workers=num_workers) as executor:
+            for result in executor.map(process_transforms, chunks):
+                all_variants.update(result)
+        return list(all_variants)
+    
+    else:
+        variants = set()
+        queue = deque([(base, 0)])  # (variant, depth)
+        seen = {base}
+        while queue:
+            current, depth = queue.popleft()
+            if depth > chain_depth:
+                continue
+            if len(current) <= max_length:
+                variants.add(current)
+            for transform in TRANSFORMATIONS.values():
+                for var in transform(current):
+                    if var not in seen and len(var) <= max_length:
+                        seen.add(var)
+                        queue.append((var, depth + 1))
+        return list(variants)
 
 def generate_human_chains(base: str) -> set:
     """
@@ -136,52 +162,6 @@ def generate_human_chains(base: str) -> set:
     for transform in TRANSFORMATIONS.values():
         chains.update(transform(base))
     return chains
-
-def generate_variants_parallel(base, max_length=20, chain_depth=5, num_workers=None):
-    """
-    Generate password variants using multiple CPU cores for improved performance.
-    
-    Args:
-        base: Base password to generate variants from
-        max_length: Maximum length of variants to consider
-        chain_depth: Maximum depth of transformation chains
-        num_workers: Number of worker processes (defaults to CPU count)
-    
-    Returns:
-        List of unique password variants
-    """
-    if num_workers is None:
-        num_workers = max(1, os.cpu_count() - 1)  # Leave one core free for system
-    
-    # Create partial functions with fixed arguments
-    def process_transforms(transform_keys, base=base, max_length=max_length, chain_depth=chain_depth):
-        variants = set()
-        for key in transform_keys:
-            transform_fn = TRANSFORMATIONS[key]
-            # Apply each transformation to the base password
-            for variant in transform_fn(base):
-                if variant and len(variant) <= max_length:
-                    variants.add(variant)
-                    
-                    # Apply recursive chains if depth allows
-                    if chain_depth > 1:
-                        for chain_variant in _generate_chain_variants(variant, max_length, chain_depth-1):
-                            variants.add(chain_variant)
-        
-        return list(variants)
-    
-    # Split transformation keys across workers
-    transform_keys = list(TRANSFORMATIONS.keys())
-    chunk_size = max(1, len(transform_keys) // num_workers)
-    transform_chunks = [transform_keys[i:i+chunk_size] for i in range(0, len(transform_keys), chunk_size)]
-    
-    # Process in parallel
-    all_variants = set([base])  # Include the original password
-    with ProcessPoolExecutor(max_workers=num_workers) as executor:
-        for result in executor.map(process_transforms, transform_chunks):
-            all_variants.update(result)
-    
-    return list(all_variants)
 
 # Helper function to maintain compatibility with existing code
 def _generate_chain_variants(base, max_length, depth):
@@ -214,7 +194,6 @@ def _generate_chain_variants(base, max_length, depth):
 ########################################
 
 def load_and_split_data(dataset_path: str = os.path.join(PROJECT_ROOT, "datasets", "default.csv")) -> tuple[list, list]:
-    """Load base passwords from the specified file and generate training/validation data."""
     dataset_path = os.path.normpath(dataset_path)
     
     if not os.path.exists(dataset_path):
@@ -226,9 +205,13 @@ def load_and_split_data(dataset_path: str = os.path.join(PROJECT_ROOT, "datasets
     if not bases:
         raise ValueError(f"No valid passwords found in dataset: {dataset_path}")
     
+    # Load config for variant generation
+    config = load_configuration(CONFIG_FILE)
+    
     data = []
     for base in bases:
-        variants = generate_variants(base, 20, 2)
+        # Updated call with config parameter
+        variants = generate_variants(base, 20, 2, config=config)
         if not variants:
             print(f"Warning: No variants generated for base password '{base}'")
             continue

@@ -17,10 +17,6 @@ A tool for password variant generation and scoring using machine learning.
 
 Crackernaut is a sophisticated password guessing utility designed to generate human-like password variants from a given base password. It combines rule-based transformations with machine learning to produce plausible password guesses that reflect common patterns humans use when creating passwords. This tool is intended for security researchers, penetration testers, and anyone needing to test password strength by generating realistic variants for analysis or cracking attempts.
 
-## Use Case
-
-Crackernaut is ideal for generating realistic password guesses for security testing, such as assessing the strength of password policies or simulating human behavior in password creation.
-
 ## Features
 
 - **Human-Like Variants:**  
@@ -89,23 +85,13 @@ python crackernaut.py --password "mypassword" --model transformer
 - `--config, -c`: Path to configuration file (default: config.json).
 - `--depth, -d`: Chain depth for variant generation.
 - `--model, -m`: Model type: transformer, rnn, bilstm, mlp (default: transformer).
-
-### Generating Password Variants
-```bash
-python crackernaut.py -p <base_password> [-l <max_length>] [-n <output_count>] [-o <output_file>]
-```
-- `-p, --password`: Base password (prompts if not provided).
-- `-l, --length`: Maximum length of variants.
-- `-n, --number`: Number of top variants to output.
-- `-o, --output`: File to save variants.
-
-Example:
-```bash
-python crackernaut.py -p "Summer2023" -l 15 -n 10 -o variants.txt
-```
+- `--prepare`: Trigger list preparation.
+- `--lp-dataset`: Path to large password dataset for list preparation.
+- `--lp-output`: Output directory for clusters (default: clusters).
+- `--lp-chunk-size`: Chunk size for list preparation (default: 1000000).
 
 ### Training the Model
-Use `crackernaut_train.py` to train the ML model and refine configuration.
+Use crackernaut_train.py to train the ML model and refine configuration.
 
 #### Bulk Training
 Train on a wordlist (one password per line):
@@ -134,7 +120,7 @@ python crackernaut_train.py --interactive
 ```
 
 ### Configuration
-Customize Crackernaut via the `config.json` file. Key options include:
+Customize Crackernaut via the config.json file. Key options include:
 - `model_type`: Model for scoring (transformer, rnn, bilstm, mlp)
 - `model_embed_dim`: Embedding dimension for the transformer (default: 64)
 - `model_num_heads`: Number of attention heads (default: 4)
@@ -150,17 +136,6 @@ Customize Crackernaut via the `config.json` file. Key options include:
 ### Ethical and Security Considerations
 - Always obtain explicit permission before using Crackernaut for security testing.
 - Handle password datasets securely, using encryption where necessary, and comply with all applicable data protection laws.
-
-### Usage
-1. Preprocess passwords: `python list_preparer.py --input passwords.txt`
-2. Train the model: `python crackernaut_train.py --config config.json`
-3. Run interactively: `python crackernaut_train.py --interactive`
-
-## Work in Progress
-
-- List preparation module for organizing password datasets
-- Updated training pipeline for transformer models
-- Improved test coverage
 
 ## Technical Architecture
 
@@ -191,11 +166,12 @@ Crackernaut implements various transformation strategies:
 - Filtering and ranking
 - Output of top variants
 
-### Training Methods
-- Supervised Learning from known password pairs.
-- Self-Supervised Learning from pattern mining.
-- Interactive Learning via user feedback.
-- Intelligent Dataset Reduction via clustering.
+## Work in Progress
+
+- List preparation module for organizing password datasets
+- Updated training pipeline for transformer models
+- Improved test coverage
 
 ## Disclaimer
-Crackernaut is provided for educational and authorized security testing purposes only. Use responsibly and legally.
+
+Crackernaut is intended for ethical use only. Misuse of this tool for unauthorized access or malicious purposes is strictly prohibited.

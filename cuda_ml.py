@@ -21,29 +21,11 @@ from variant_utils import (
     mine_incremental_patterns, 
     mine_year_patterns
 )
+from common_utils import extract_features, MLP
+
 INPUT_DIM = 8
 HIDDEN_DIM = 64
 OUTPUT_DIM = 6
-
-class MLP(nn.Module):
-    def __init__(self, input_dim=8, hidden_dim=64, output_dim=6, dropout=0.2):
-        super().__init__()
-        self.fc1 = nn.Linear(input_dim, hidden_dim)
-        self.fc2 = nn.Linear(hidden_dim, hidden_dim)
-        self.fc3 = nn.Linear(hidden_dim, hidden_dim // 2)
-        self.fc4 = nn.Linear(hidden_dim // 2, output_dim)
-        self.dropout = nn.Dropout(dropout)
-        self.relu = nn.ReLU()
-
-    def forward(self, x):
-        x = self.relu(self.fc1(x))
-        x = self.dropout(x)
-        x = self.relu(self.fc2(x))
-        x = self.dropout(x)
-        x = self.relu(self.fc3(x))
-        x = self.dropout(x)
-        x = self.fc4(x)
-        return x
 
 class PasswordRNN(nn.Module):
     """
@@ -52,45 +34,21 @@ class PasswordRNN(nn.Module):
     Processes passwords as sequences of characters and predicts
     modification preference scores for various transformation types.
     """
-    def __init__(self, vocab_size=128, embed_dim=32, hidden_dim=64, output_dim=6, 
-                 num_layers=2, dropout=0.2):
-        super().__init__()
-        self.embedding = nn.Embedding(vocab_size, embed_dim)
-        self.lstm = nn.LSTM(
-            embed_dim, 
-            hidden_dim, 
-            num_layers=num_layers, 
-            batch_first=True, 
-            dropout=dropout if num_layers > 1 else 0
-        )
-        self.dropout = nn.Dropout(dropout)
+    def __init__(self, embed_dim, hidden_dim, num_layers, dropout, output_dim=6):
+        super(PasswordRNN, self).__init__()
+        self.hidden_dim = hidden_dim
+        self.num_layers = num_layers
+        self.embedding = nn.EmbeddingBag(embed_dim, hidden_dim, sparse=True)
+        self.rnn = nn.LSTM(hidden_dim, hidden_dim, num_layers, dropout=dropout, batch_first=True)
         self.fc = nn.Linear(hidden_dim, output_dim)
-        
+
     def forward(self, x):
-        """
-        Forward pass through the RNN.
-        
-        Args:
-            x: Tensor of shape (batch_size, seq_len) with character indicess
-            
-        Returns:
-            Tensor of shape (batch_size, output_dim) with modification scores
-        """
         embedded = self.embedding(x)
-        
-        # Get the full sequence output and hidden states
-        lstm_out, (_, _) = self.lstm(embedded)  # lstm_out: [batch_size, seq_len, hidden_dim]
-        
-        # Apply attention mechanism to lstm_out
-        attn_weights = F.softmax(self.attention(lstm_out).squeeze(-1), dim=1)
-        attn_weights = attn_weights.unsqueeze(-1)  # [batch_size, seq_len, 1]
-        
-        # Create context vector as weighted sum of lstm outputs
-        context = torch.sum(lstm_out * attn_weights, dim=1)  # [batch_size, hidden_dim]
-        
-        # Pass context through final classification layer
-        output = self.fc(context)
-        return output
+        h0 = torch.zeros(self.num_layers, x.size(0), self.hidden_dim).to(x.device)
+        c0 = torch.zeros(self.num_layers, x.size(0), self.hidden_dim).to(x.device)
+        out, _ = self.rnn(embedded, (h0, c0))
+        out = self.fc(out[:, -1, :])
+        return out
 
 class PasswordBiLSTM(nn.Module):
     """
@@ -136,10 +94,36 @@ def create_parallel_model(model, min_dataset_size=10000):
     else:
         return model.cuda()
 
+def load_passwords(file_path: str, max_count: int = None) -> List[str]:
+    """
+    Load passwords from a file.
+    
+    Args:
+        file_path (str): Path to the password file.
+        max_count (int, optional): Maximum number of passwords to load.
+        
+    Returns:
+        List[str]: List of passwords.
+    """
+    passwords = []
+    try:
+        with open(file_path, "r", encoding="utf-8") as f:
+            for line in f:
+                password = line.strip()
+                if password:
+                    passwords.append(password)
+                    if max_count and len(passwords) >= max_count:
+                        break
+    except Exception as e:
+        print(f"Error loading passwords: {e}")
+    return passwords
+
 def load_ml_model(config=None, model_type="bilstm"):
     """
     Load the appropriate ML model based on configuration and type.
     """
+    model_dir = os.path.join("models", model_type)
+    model_path = os.path.join(model_dir, f"{model_type}_model.pth")
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     
     # Get parameters from config with defaults
@@ -177,8 +161,6 @@ def load_ml_model(config=None, model_type="bilstm"):
             dropout=dropout
         ).to(device)
     
-    # Try to load saved model
-    model_path = f"{model_type}_model.pth"
     if os.path.exists(model_path):
         try:
             model.load_state_dict(torch.load(model_path, map_location=device))
@@ -189,56 +171,10 @@ def load_ml_model(config=None, model_type="bilstm"):
     return model
 
 def save_ml_model(model, model_type="rnn"):
-    """
-    Save ML model with appropriate filename based on model type.
-    
-    Args:
-        model (nn.Module): PyTorch model to save
-        model_type (str): Type of model ("mlp" or "rnn")
-    """
-    if isinstance(model, PasswordRNN):
-        model_type = "rnn"
-    elif isinstance(model, MLP):
-        model_type = "mlp"
-    
-    model_path = f"{model_type}_model.pth"
+    model_dir = os.path.join("models", model_type)
+    model_path = os.path.join(model_dir, f"{model_type}_model.pth")
     torch.save(model.state_dict(), model_path)
     print(f"Model saved to {model_path}")
-
-def extract_features(variant: str, base: str, device: str = "cpu") -> torch.Tensor:
-    """
-    Extracts an 8D feature vector from a (base, variant) pair on the specified device.
-    """
-    import string
-    
-    def numeric_suffix_len(s: str) -> int:
-        match = re.search(r"(\d+)$", s)
-        return len(match.group(1)) if match else 0
-
-    f1 = abs(numeric_suffix_len(variant) - numeric_suffix_len(base))
-    f2 = sum(ch in string.punctuation for ch in variant)
-    
-    min_len = min(len(base), len(variant))
-    cap_diff = sum(1 for i in range(min_len) if base[i].islower() != variant[i].islower())
-    f3 = float(cap_diff)
-    
-    leet_chars = {"0", "3", "1", "$"}
-    f4 = sum(ch in leet_chars for ch in variant)
-    
-    m_b = re.search(r"\d+$", base)
-    m_v = re.search(r"^\d+", variant)
-    f5 = 1 if m_b and m_v and m_b.group() == m_v.group() else 0
-    
-    f6 = abs(len(variant) - len(base))
-    
-    symbol_positions = [i for i, c in enumerate(variant) if c in string.punctuation]
-    f7 = len(symbol_positions) / len(variant) if variant else 0
-    
-    total_leet = sum(1 for c in variant if c in leet_chars)
-    f8 = total_leet / len(variant) if variant else 0
-    
-    features = [f1, f2, f3, f4, f5, f6, f7, f8]
-    return torch.tensor(features, dtype=torch.float32, device=device).unsqueeze(0)
 
 def text_to_tensor(text, max_length=20, device="cpu"):
     """
@@ -338,6 +274,44 @@ def train_model(training_data, model, epochs=10):
         print(f"Epoch {epoch+1}/{epochs}, Loss={loss.item():.6f}")
 
     model.eval()
+    return model
+
+def train_self_supervised(model, training_pairs, epochs=5, batch_size=64, lr=0.001):
+    """
+    Train the model in a self-supervised manner.
+    
+    Args:
+        model (nn.Module): The model to train.
+        training_pairs (List[Tuple[str, str, float]]): Training pairs with confidence scores.
+        epochs (int): Number of training epochs.
+        batch_size (int): Batch size for training.
+        lr (float): Learning rate.
+        
+    Returns:
+        nn.Module: Trained model.
+    """
+    optimizer = optim.Adam(model.parameters(), lr=lr)
+    loss_fn = nn.MSELoss()
+    device = next(model.parameters()).device
+    
+    for epoch in range(epochs):
+        model.train()
+        total_loss = 0.0
+        for i in range(0, len(training_pairs), batch_size):
+            batch = training_pairs[i:i + batch_size]
+            batch_loss = 0.0
+            for base, variant, confidence in batch:
+                features = extract_features(variant, base, device=device)
+                target = torch.tensor([confidence] * OUTPUT_DIM, device=device)
+                optimizer.zero_grad()
+                prediction = model(features)
+                loss = loss_fn(prediction, target)
+                loss.backward()
+                optimizer.step()
+                batch_loss += loss.item()
+            total_loss += batch_loss
+        print(f"Epoch {epoch + 1}/{epochs}, Loss: {total_loss / len(training_pairs):.6f}")
+    
     return model
 
 def predict_config_adjustment(features, model):

@@ -1,97 +1,123 @@
-#!/usr/bin/env python3
-"""
-list_preparer.py
-
-This module implements the list‐preparing model for Crackernaut.
-It processes a massive password dataset in memory‐efficient chunks,
-generates low‑dimensional embeddings using a lightweight transformer encoder,
-clusters the embeddings using Mini‑Batch K‑Means, and selects representative
-passwords from each cluster to create a structured, diverse training set.
-"""
-
-import os
-import torch
-import torch.nn as nn
-import numpy as np
-import logging
 import asyncio
 import aiofiles
-import time
-from tqdm import tqdm
+import torch
+import numpy as np
+import os
+
 from sklearn.cluster import MiniBatchKMeans
-from transformer_model import PasswordTransformer
-from async_utils import async_save_passwords, async_load_passwords, async_save_results
-from torch.cuda.amp import autocast
+from tqdm import tqdm
+from pathlib import Path
 
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-logger = logging.getLogger('list_preparer')
+# Step 1: Load passwords from a file with progress
+async def load_password_chunks(file_path: str, chunk_size=1000000, total_lines=None):
+    """Load passwords in chunks with deduplication and progress tracking."""
+    async with aiofiles.open(file_path, 'r', encoding='utf-8') as f:
+        chunk = []
+        seen = set()
+        # Initialize tqdm with total if known, else indeterminate
+        pbar = tqdm(total=total_lines, desc="Loading passwords", unit="lines") if total_lines else tqdm(desc="Loading passwords", unit="lines")
+        async for line in f:
+            pwd = line.strip()
+            if len(pwd) >= 4 and pwd not in seen:  # Basic filtering
+                chunk.append(pwd)
+                seen.add(pwd)
+            if len(chunk) >= chunk_size:
+                yield chunk
+                chunk = []
+                seen.clear()
+                pbar.update(chunk_size)
+        if chunk:
+            yield chunk
+            pbar.update(len(chunk))
+        pbar.close()
 
-# Convert passwords to tensors with padding and Unicode support
-def text_to_tensor(passwords, max_length=20, device="cuda", vocab_size=256):
+# Step 2: Convert text to tensor for model input
+def text_to_tensor(passwords, max_length=20, device="cuda", vocab_size=128):
+    """Convert passwords to a padded tensor."""
     batch = []
     for pwd in passwords:
-        indices = [ord(c) % vocab_size for c in pwd[:max_length]]  # Map characters to indices
-        if len(indices) < max_length:
-            indices += [0] * (max_length - len(indices))  # Pad with zeros
+        indices = [ord(c) % vocab_size for c in pwd[:max_length]]
+        indices += [0] * (max_length - len(indices)) if len(indices) < max_length else []
         batch.append(indices)
     return torch.tensor(batch, dtype=torch.long, device=device)
 
-# Transformer model for embedding generation
-class PasswordEmbeddingModel(nn.Module):
-    def __init__(self, vocab_size=256, embed_dim=32, num_heads=4, num_layers=2, hidden_dim=64, dropout=0.2):
-        super().__init__()
-        self.embedding = nn.Embedding(vocab_size, embed_dim)
-        encoder_layer = nn.TransformerEncoderLayer(d_model=embed_dim, nhead=num_heads, dim_feedforward=hidden_dim, dropout=dropout)
-        self.encoder = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
-    
-    def forward(self, x, mask=None):
-        emb = self.embedding(x).transpose(0, 1)  # Shape: (seq_len, batch, embed_dim)
-        out = self.encoder(emb, src_key_padding_mask=mask)  # Shape: (seq_len, batch, embed_dim)
-        return out.mean(dim=0)  # Mean pooling: (batch, embed_dim)
-
-# Extract embeddings from password list
+# Step 3: Extract embeddings with progress
 def extract_embeddings(model, password_list, batch_size=1024, device="cuda", max_length=20):
+    """Extract embeddings in batches with progress tracking."""
     model.eval()
     embeddings = []
+    # Progress bar for embedding extraction
+    pbar = tqdm(total=len(password_list), desc="Extracting embeddings", unit="passwords")
     for i in range(0, len(password_list), batch_size):
         batch = password_list[i:i + batch_size]
         tensors = text_to_tensor(batch, max_length=max_length, device=device)
-        masks = (tensors != 0).to(device)  # True for non-padding tokens
-        with torch.no_grad(), autocast():  # Mixed precision for efficiency
-            emb = model(tensors, mask=~masks)  # ~masks to ignore padding
+        with torch.no_grad():
+            emb = model(tensors)
         embeddings.append(emb.cpu().numpy())
+        pbar.update(len(batch))
+    pbar.close()
     return np.vstack(embeddings)
 
-# Cluster passwords using Mini-Batch K-Means
-def cluster_passwords(embeddings, n_clusters=100):
-    kmeans = MiniBatchKMeans(n_clusters=n_clusters, random_state=0, batch_size=1000)
-    clusters = kmeans.fit_predict(embeddings)
-    return clusters
+# Step 4: Cluster embeddings
+def cluster_passwords(embeddings, n_clusters=1000):
+    """Cluster embeddings using MiniBatchKMeans."""
+    kmeans = MiniBatchKMeans(n_clusters=n_clusters, random_state=42)
+    labels = kmeans.fit_predict(embeddings)
+    return labels, kmeans.cluster_centers_
 
-# Save clusters to output directory
-def save_clusters(clusters, output_dir):
-    async_save_results(clusters, output_dir)
+# Step 5: Save clusters with progress
+def save_clusters(passwords, labels, embeddings, output_dir="clusters"):
+    """Save cluster representatives with progress tracking."""
+    Path(output_dir).mkdir(exist_ok=True)
+    clusters = {}
+    for pwd, label, emb in zip(passwords, labels, embeddings):
+        clusters.setdefault(label, []).append((pwd, emb))
+    
+    # Select representative password per cluster
+    reps = {}
+    for label, items in clusters.items():
+        passwords, embs = zip(*items)
+        centroid = np.mean(embs, axis=0)
+        rep_idx = np.argmin([np.linalg.norm(e - centroid) for e in embs])
+        reps[label] = passwords[rep_idx]
+    
+    # Progress bar for saving
+    pbar = tqdm(total=len(reps), desc="Saving clusters", unit="clusters")
+    for label, rep in reps.items():
+        cluster_file = os.path.join(output_dir, f"cluster_{label}.txt")
+        with open(cluster_file, "w", encoding="utf-8") as f:
+            f.write(rep)
+        pbar.update(1)
+    pbar.close()
 
-# Representative Password Selection
-def select_representative_passwords(clusters, passwords, n_samples=10):
-    representative_passwords = []
-    for cluster in np.unique(clusters):
-        cluster_indices = np.where(clusters == cluster)[0]
-        selected_indices = np.random.choice(cluster_indices, n_samples, replace=False)
-        representative_passwords.extend([passwords[i] for i in selected_indices])
-    return representative_passwords
+# Main function to run the pipeline
+async def prepare_list(dataset_path: str, output_dir="clusters"):
+    """Run the list preparation pipeline with progress bars."""
+    # Count lines for accurate progress (optional, can skip for simplicity)
+    total_lines = sum(1 for _ in open(dataset_path, 'r', encoding='utf-8'))
+    print(f"Dataset has {total_lines} lines")
 
-# Run the entire preparation process
-async def run_preparation(dataset_path, output="clusters", chunk_size=1000000):
-    passwords = await async_load_passwords(dataset_path, chunk_size)
-    model = PasswordEmbeddingModel().to("cuda")
-    embeddings = extract_embeddings(model, passwords)
-    clusters = cluster_passwords(embeddings)
-    save_clusters(clusters, output)
+    # Load passwords
+    all_passwords = []
+    async for chunk in load_password_chunks(dataset_path, chunk_size=1000000, total_lines=total_lines):
+        all_passwords.extend(chunk)
+    print(f"Loaded {len(all_passwords)} unique passwords")
 
-# Example usage
+    # Initialize model and device
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    model = PasswordTransformer().to(device)
+
+    # Extract embeddings
+    embeddings = extract_embeddings(model, all_passwords, device=device)
+
+    # Cluster passwords
+    n_clusters = max(1, len(all_passwords) // 10)  # Heuristic: 1 cluster per 10 passwords
+    labels, _ = cluster_passwords(embeddings, n_clusters=n_clusters)
+
+    # Save results
+    save_clusters(all_passwords, labels, embeddings, output_dir=output_dir)
+    print(f"Preparation complete. Clusters saved in {output_dir}")
+
+# Run the pipeline
 if __name__ == "__main__":
-    import asyncio
-    asyncio.run(run_preparation("large_password_dataset.txt"))
-    representative_passwords = select_representative_passwords(clusters, passwords)
-    print(representative_passwords)
+    asyncio.run(prepare_list("passwords.txt"))

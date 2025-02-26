@@ -4,7 +4,7 @@ import torch
 import logging
 import torch.nn.functional as F
 from typing import Dict, List, Optional, Tuple, Any
-from list_preparer import PasswordEmbeddingModel
+from models.embedding.embedding_model import PasswordEmbedder
 
 def get_optimal_workers() -> int:
     """Get optimal number of worker processes based on system resources"""
@@ -115,7 +115,7 @@ def choose_parallelism_strategy(task_type: str, device_info: Dict[str, Any]) -> 
     return 'sequential'  # Default fallback
 
 def enable_gradient_checkpointing(model):
-    if isinstance(model, PasswordEmbeddingModel):
+    if isinstance(model, PasswordEmbedder):
         model.gradient_checkpointing = True
         print("Gradient checkpointing enabled.")
     else:

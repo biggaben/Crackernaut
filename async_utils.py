@@ -135,6 +135,49 @@ async def async_process_directory(
     
     return results
 
+async def run_preparation(dataset_path: str, output: str, chunk_size: int = 10000) -> None:
+    """
+    Asynchronously prepare a dataset by splitting it into manageable chunks.
+    
+    Args:
+        dataset_path: Path to the password dataset file
+        output: Directory to store output chunks
+        chunk_size: Number of passwords per chunk
+    """
+    # Ensure output directory exists
+    os.makedirs(output, exist_ok=True)
+    
+    logging.info(f"Loading passwords from {dataset_path}")
+    
+    # Load passwords from dataset
+    passwords = await async_load_passwords(dataset_path)
+    
+    if not passwords:
+        logging.error(f"No passwords loaded from {dataset_path}")
+        return
+    
+    total_passwords = len(passwords)
+    logging.info(f"Loaded {total_passwords} passwords, splitting into chunks of {chunk_size}")
+    
+    # Calculate number of chunks
+    total_chunks = (total_passwords + chunk_size - 1) // chunk_size
+    
+    # Process and save each chunk
+    for i in range(total_chunks):
+        start_idx = i * chunk_size
+        end_idx = min(start_idx + chunk_size, total_passwords)
+        chunk = passwords[start_idx:end_idx]
+        
+        # Format output filename with leading zeros for proper sorting
+        chunk_file = os.path.join(output, f"chunk_{i+1:04d}.txt")
+        
+        # Save chunk with empty scores (just the passwords)
+        await async_save_results([(pw, "") for pw in chunk], chunk_file)
+        
+        logging.info(f"Saved chunk {i+1}/{total_chunks} ({len(chunk)} passwords) to {chunk_file}")
+    
+    logging.info(f"Dataset preparation complete: {total_chunks} chunks saved to {output}")
+
 from typing import List
 
 def load_passwords(wordlist_path: str, max_count: int = 100000) -> List[str]:
