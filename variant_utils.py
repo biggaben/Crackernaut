@@ -5,14 +5,17 @@ import json
 import torch
 import torch.nn as nn
 import torch.optim as optim
+import torch.nn.functional as F
 
-from typing import List, Set
+from typing import List, Set, Dict, Tuple, Callable
 from ax.service.ax_client import AxClient, ObjectiveProperties
 from ax.utils.measurement.synthetic_functions import branin
 from cuda_ml import extract_features, MLP
 from config_utils import PROJECT_ROOT as PROJECT_ROOT
 from collections import deque
 from typing import List
+from concurrent.futures import ProcessPoolExecutor
+from functools import partial
 
 SYMBOLS = ["!", "@", "#", "$", "%", "^", "&", "*", "?", "-", "+"]
 
@@ -56,7 +59,8 @@ def _chain_leet_substitution(base: str) -> Set[str]:
             variants.add(f"{base[:i]}{random.choice(mapping[ch])}{base[i+1:]}")
     return variants
 
-def _chain_shift_variants(base: str) -> Set[str]:
+def chain_shift_variants(base: str) -> Set[str]:
+    """Shift numeric portion of password between front and back"""
     variants = set()
     if m := re.search(r"^(\D+)(\d+)$", base):
         variants.add(f"{m.group(2)}{m.group(1)}")
@@ -81,7 +85,7 @@ TRANSFORMATIONS = {
     "symbol": _chain_symbol_addition,
     "capitalization": _chain_capitalization_tweaks,
     "leet": _chain_leet_substitution,
-    "shift": _chain_shift_variants,
+    "shift": chain_shift_variants,
     "repetition": _chain_repetition_variants,
     "middle_insertion": _chain_middle_insertion
 }
@@ -132,6 +136,78 @@ def generate_human_chains(base: str) -> set:
     for transform in TRANSFORMATIONS.values():
         chains.update(transform(base))
     return chains
+
+def generate_variants_parallel(base, max_length=20, chain_depth=5, num_workers=None):
+    """
+    Generate password variants using multiple CPU cores for improved performance.
+    
+    Args:
+        base: Base password to generate variants from
+        max_length: Maximum length of variants to consider
+        chain_depth: Maximum depth of transformation chains
+        num_workers: Number of worker processes (defaults to CPU count)
+    
+    Returns:
+        List of unique password variants
+    """
+    if num_workers is None:
+        num_workers = max(1, os.cpu_count() - 1)  # Leave one core free for system
+    
+    # Create partial functions with fixed arguments
+    def process_transforms(transform_keys, base=base, max_length=max_length, chain_depth=chain_depth):
+        variants = set()
+        for key in transform_keys:
+            transform_fn = TRANSFORMATIONS[key]
+            # Apply each transformation to the base password
+            for variant in transform_fn(base):
+                if variant and len(variant) <= max_length:
+                    variants.add(variant)
+                    
+                    # Apply recursive chains if depth allows
+                    if chain_depth > 1:
+                        for chain_variant in _generate_chain_variants(variant, max_length, chain_depth-1):
+                            variants.add(chain_variant)
+        
+        return list(variants)
+    
+    # Split transformation keys across workers
+    transform_keys = list(TRANSFORMATIONS.keys())
+    chunk_size = max(1, len(transform_keys) // num_workers)
+    transform_chunks = [transform_keys[i:i+chunk_size] for i in range(0, len(transform_keys), chunk_size)]
+    
+    # Process in parallel
+    all_variants = set([base])  # Include the original password
+    with ProcessPoolExecutor(max_workers=num_workers) as executor:
+        for result in executor.map(process_transforms, transform_chunks):
+            all_variants.update(result)
+    
+    return list(all_variants)
+
+# Helper function to maintain compatibility with existing code
+def _generate_chain_variants(base, max_length, depth):
+    """
+    Generate chain variants recursively up to specified depth.
+    
+    Args:
+        base: Base password string
+        max_length: Maximum length of variants
+        depth: Current recursion depth
+    
+    Returns:
+        Set of variant strings
+    """
+    variants = set()
+    if depth <= 0 or not base or len(base) > max_length:
+        return variants
+        
+    for transform_key, transform_fn in TRANSFORMATIONS.items():
+        new_variants = transform_fn(base)
+        for variant in new_variants:
+            if variant and len(variant) <= max_length:
+                variants.add(variant)
+                if depth > 1:
+                    variants.update(_generate_chain_variants(variant, max_length, depth-1))
+    return variants
 
 ########################################
 # Machine Learning Integration
@@ -347,3 +423,112 @@ def identify_modifications(variant: str, base: str) -> List[str]:
         mods.append("Repetition")
     
     return list(set(mods))
+
+def password_similarity(pw1: str, pw2: str) -> float:
+    """Calculate password similarity using multiple metrics."""
+    import Levenshtein
+    
+    # Normalize lengths for comparison
+    max_len = max(len(pw1), len(pw2))
+    if max_len == 0:
+        return 0.0
+        
+    # Calculate Levenshtein (edit) distance similarity
+    edit_similarity = 1.0 - (Levenshtein.distance(pw1, pw2) / max_len)
+    
+    # Calculate character overlap similarity
+    common_chars = set(pw1).intersection(set(pw2))
+    char_similarity = len(common_chars) / len(set(pw1).union(set(pw2))) if pw1 and pw2 else 0
+    
+    # Pattern similarity (e.g. both end with numbers)
+    pattern_similarity = 0.0
+    if re.search(r'\d+$', pw1) and re.search(r'\d+$', pw2):
+        pattern_similarity += 0.2
+    if pw1.lower().startswith(pw2.lower()[:3]) or pw2.lower().startswith(pw1.lower()[:3]):
+        pattern_similarity += 0.2
+        
+    # Combined similarity score (weighted)
+    return (0.5 * edit_similarity) + (0.3 * char_similarity) + (0.2 * pattern_similarity)
+
+def extract_pattern_clusters(passwords: List[str], min_cluster_size: int = 3) -> Dict[str, List[str]]:
+    """Group passwords by common structural patterns."""
+    from collections import defaultdict
+    
+    pattern_map = defaultdict(list)
+    
+    for password in passwords:
+        if not password:
+            continue
+            
+        # Create a structural fingerprint (e.g., "LLLDDDS" for "abc123!")
+        pattern = ''.join('L' if c.isalpha() else 
+                         'D' if c.isdigit() else 
+                         'S' for c in password)
+        
+        # Add length information to the pattern
+        length_pattern = f"{pattern}_{len(password)}"
+        pattern_map[length_pattern].append(password)
+    
+    # Return only patterns with sufficient examples
+    return {k: v for k, v in pattern_map.items() if len(v) >= min_cluster_size}
+
+def mine_year_patterns(passwords: List[str]) -> List[Tuple[str, str]]:
+    """Extract high-confidence training pairs from year patterns."""
+    from collections import defaultdict
+    
+    # Find passwords ending with 4 digits (likely years)
+    year_pattern = re.compile(r'^(.+?)(\d{4})$')
+    
+    # Group by base part
+    password_map = defaultdict(list)
+    for password in passwords:
+        match = year_pattern.match(password)
+        if match:
+            base, year = match.groups()
+            if len(year) == 4 and 1900 <= int(year) <= 2030:  # Validate as plausible year
+                password_map[base].append(year)
+    
+    # Find bases with multiple years (strong indicator of variants)
+    training_pairs = []
+    for base, years in password_map.items():
+        if len(years) >= 2:
+            # Create pairs from each year variant
+            base_passwords = [f"{base}{year}" for year in years]
+            for i, pw1 in enumerate(base_passwords):
+                for pw2 in base_passwords[i+1:]:
+                    training_pairs.append((pw1, pw2))
+    
+    return training_pairs
+
+def mine_incremental_patterns(passwords: List[str]) -> List[Tuple[str, str]]:
+    """Find passwords with incremental number patterns."""
+    from collections import defaultdict
+    
+    training_pairs = []
+    
+    # Group passwords by their alphabetic prefix
+    alpha_groups = defaultdict(list)
+    for password in passwords:
+        match = re.match(r'^([a-zA-Z]+)(\d+)$', password)
+        if match:
+            prefix, number = match.groups()
+            alpha_groups[prefix.lower()].append((password, int(number)))
+    
+    # Find sequential numbers with the same prefix
+    for prefix, pw_numbers in alpha_groups.items():
+        if len(pw_numbers) < 2:
+            continue
+            
+        # Sort by the numeric part
+        pw_numbers.sort(key=lambda x: x[1])
+        
+        # Look for sequential or nearby numbers
+        for i in range(len(pw_numbers) - 1):
+            current_pw, current_num = pw_numbers[i]
+            next_pw, next_num = pw_numbers[i + 1]
+            
+            # Check if numbers are close (e.g., 123 and 124)
+            if 0 < next_num - current_num <= 5:
+                training_pairs.append((current_pw, next_pw))
+    
+    return training_pairs
