@@ -1,8 +1,23 @@
-numpy>=2.2.3
-tqdm>=4.67.1
-pycuda>=2025.1
-ax-platform>=0.4.1
-python-Levenshtein>=0.26.1
-torch>=1.9.0
-aiofiles>=0.7.0
-scikit-learn>=1.0.0
+# DEPRECATED: This file is maintained for backwards compatibility only.
+# 
+# Crackernaut now uses uv for dependency management.
+# Please use one of the following instead:
+#
+#   uv sync                    # Install basic dependencies
+#   uv sync --extra cuda      # Install with CUDA support
+#   uv sync --extra dev       # Install development tools
+#   uv sync --all-extras      # Install everything
+#
+# For migration help, run: uv run python migrate_to_uv.py
+# Or use the setup scripts: .\setup.ps1 (Windows) or ./setup.sh (Unix)
+#
+# These pip requirements are automatically managed by pyproject.toml:
+
+numpy
+tqdm
+pycuda
+ax-platform
+python-Levenshtein
+torch
+aiofiles
+scikit-learn

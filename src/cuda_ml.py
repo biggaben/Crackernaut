@@ -21,7 +21,7 @@ from variant_utils import (
     mine_incremental_patterns, 
     mine_year_patterns
 )
-from common_utils import extract_features, MLP
+from .utils.common_utils import extract_features, MLP
 
 INPUT_DIM = 8
 HIDDEN_DIM = 64

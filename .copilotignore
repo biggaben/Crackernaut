@@ -1,0 +1,71 @@
+# Crackernaut - Files to exclude from Copilot indexing
+# Following advanced context filtering methodology
+
+# === Performance-Critical Exclusions ===
+# Sensitive training data
+trainingdata/
+*.txt
+!requirements.txt
+!README.txt
+!COPILOT_SETUP.txt
+
+# Large binary data and model artifacts
+clusters/*.npy
+clusters/*.pkl
+models/*/checkpoints/
+models/*/weights/
+*.pth
+*.pt
+*.ckpt
+
+# Logs and monitoring data
+*.log
+logs/
+wandb/
+tensorboard/
+mlruns/
+
+# === Third-Party and External Context ===
+# Python package cache (well-documented externally)
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# Virtual environments and UV cache
+venv/
+.venv/
+.uv-cache/
+uv.lock
+
+# === Temporary and Generated Files ===
+*.tmp
+*.temp
+temp/
+tmp/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# === Environment and Security ===
+.env
+.env.*
+secrets/
+credentials/
+.git/
+.gitignore
+
+# === IDE and Editor Files (except VS Code config) ===
+.idea/
+*.sublime-*
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+
+# === Build and Distribution ===
+build/
+dist/
+*.egg-info/
+.tox/

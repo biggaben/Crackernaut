@@ -15,7 +15,7 @@ from collections import deque
 from typing import List
 from concurrent.futures import ProcessPoolExecutor
 from functools import partial
-from common_utils import extract_features, MLP
+from .common_utils import extract_features, MLP
 
 SYMBOLS = ["!", "@", "#", "$", "%", "^", "&", "*", "?", "-", "+"]
 
