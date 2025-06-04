@@ -7,7 +7,7 @@ authors = [
 ]
 readme = "README.md"
 license = { text = "MIT" }
-requires-python = ">=3.8.1"
+requires-python = ">=3.11,<3.13"
 keywords = [
     "password",
     "security",
@@ -44,7 +44,11 @@ dependencies = [
 
 [project.optional-dependencies]
 cuda = [
-    "pycuda>=2022.1",
+    # PyTorch with CUDA support - install manually with: 
+    # uv pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
+    "torch>=2.0.0",
+    "torchvision>=0.15.0",
+    "torchaudio>=2.0.0",
 ]
 dev = [
     "pytest>=7.0.0",
@@ -132,7 +136,6 @@ strict_equality = true
 
 [[tool.mypy.overrides]]
 module = [
-    "pycuda.*",
     "ax.*",
     "sklearn.*",
     "Levenshtein.*"
