@@ -69,6 +69,8 @@ Crackernaut/
 - **scripts/**: Setup and maintenance scripts separate from application logic
 - **Removed redundancy**: Eliminated empty model files and unused dependencies
 - **Professional structure**: Follows Python packaging best practices for research projects
+
+```text
 ├── pyproject.toml                # Project dependencies (uv)
 └── trainingdata/                 # Training datasets (not in VCS)
 ```
@@ -124,6 +126,7 @@ Crackernaut is a sophisticated password guessing utility designed to generate hu
 - **uv** (modern Python package manager)
 
 All dependencies are managed via `pyproject.toml` with optional extras:
+
 - `cuda`: For CUDA/GPU acceleration (includes pycuda)
 - `dev`: Development tools (black, flake8, mypy, pre-commit)
 - `test`: Testing framework (pytest, coverage)
@@ -138,6 +141,7 @@ All dependencies are managed via `pyproject.toml` with optional extras:
 ## Installation
 
 1. **Install uv** (if not already installed):
+
    ```bash
    # On Windows (PowerShell)
    powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
@@ -147,12 +151,14 @@ All dependencies are managed via `pyproject.toml` with optional extras:
    ```
 
 2. **Clone this repository:**
+
    ```bash
    git clone <repository-url>
    cd crackernaut
    ```
 
 3. **Quick Setup** (Recommended):
+
    ```bash
    # Windows
    .\scripts\setup.ps1
@@ -162,6 +168,7 @@ All dependencies are managed via `pyproject.toml` with optional extras:
    ```
 
 4. **Manual Installation:**
+
    ```bash
    # Basic installation
    uv sync
@@ -195,6 +202,7 @@ chmod +x scripts/setup.sh && ./scripts/setup.sh
 ```
 
 The migration and setup scripts will:
+
 - Remove old virtual environment directories (`.venv`, `venv`, `env`)
 - Install uv if not already present
 - Set up all dependencies using uv
@@ -203,7 +211,9 @@ The migration and setup scripts will:
 ## Usage
 
 ### Basic Usage
+
 Run Crackernaut to generate variants from a base password:
+
 ```bash
 uv run python crackernaut.py --password "mypassword" --model transformer
 ```
@@ -220,38 +230,49 @@ uv run python crackernaut.py --password "mypassword" --model transformer
 - `--lp-chunk-size`: Chunk size for list preparation (default: 1000000).
 
 ### Training the Model
+
 Use crackernaut_train.py to train the ML model and refine configuration.
 
 #### Bulk Training
+
 Train on a wordlist (one password per line):
+
 ```bash
 uv run python crackernaut_train.py --wordlist <wordlist_file> [-t <iterations>] [--model <model_type>]
 ```
 
 Example:
+
 ```bash
 uv run python crackernaut_train.py --wordlist rockyou.txt --times 5 --model bilstm
 ```
 
 #### Intelligent Dataset Preparation
+
 Process large wordlists into optimized training sets:
+
 ```bash
 uv run python crackernaut_train.py --prepare --lp-dataset <path_to_dataset> [--clusters <num_clusters>] [--lp-chunk-size <size>] [--lp-output <output_dir>]
 ```
 
 Example:
+
 ```bash
 uv run python crackernaut_train.py --prepare --lp-dataset breach_compilation.txt --clusters 20000 --lp-chunk-size 2000000
 ```
 
 #### Interactive Training
+
 Fine-tune the model with interactive feedback:
+
 ```bash
 uv run python crackernaut_train.py --interactive
 ```
 
 ### Configuration
+
 Customize Crackernaut via the config.json file. Key options include:
+
 - `model_type`: Model for scoring (transformer, rnn, bilstm, mlp)
 - `model_embed_dim`: Embedding dimension for the transformer (default: 64)
 - `model_num_heads`: Number of attention heads (default: 4)
@@ -265,6 +286,7 @@ Customize Crackernaut via the config.json file. Key options include:
 - `learning_rate`: Model training learning rate
 
 ### Ethical and Security Considerations
+
 - Always obtain explicit permission before using Crackernaut for security testing.
 - Handle password datasets securely, using encryption where necessary, and comply with all applicable data protection laws.
 
@@ -315,6 +337,7 @@ Crackernaut implements various transformation strategies:
 ## Development Environment
 
 ### GitHub Copilot Configuration
+
 This workspace includes optimized GitHub Copilot configuration for ML security research:
 
 - **Repository Instructions**: `.github/copilot-instructions.md` provides project-specific context
@@ -322,6 +345,7 @@ This workspace includes optimized GitHub Copilot configuration for ML security r
 - **Privacy Protection**: `.copilotignore` excludes sensitive training data from indexing
 
 The configuration ensures Copilot understands:
+
 - Password security research context and ethical guidelines
 - PyTorch/CUDA development patterns and error handling
 - Async I/O patterns for large dataset processing
