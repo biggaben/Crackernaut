@@ -120,23 +120,23 @@ Crackernaut is a sophisticated password guessing utility designed to generate hu
 
 ## Requirements
 
-- Python 3.8.1+
-- PyTorch (automatically installed)
-- CUDA (optional, for GPU acceleration)
-- **uv** (modern Python package manager)
+- Python 3.11+ (tested with Python 3.12.8)
+- PyTorch with CUDA support (automatically configured for RTX 3090 and similar GPUs)
+- NVIDIA GPU with CUDA 12.1+ support (optional, for GPU acceleration)
+- **uv** (modern Python package manager for fast, reliable dependency management)
 
 All dependencies are managed via `pyproject.toml` with optional extras:
 
-- `cuda`: For CUDA/GPU acceleration (includes pycuda)
-- `dev`: Development tools (black, flake8, mypy, pre-commit)
-- `test`: Testing framework (pytest, coverage)
+- `cuda`: For CUDA/GPU acceleration with PyTorch CUDA 12.1 support
+- `dev`: Development tools (black, flake8, mypy, pre-commit, pytest)
 
-**Note:** The legacy `requirements.txt` file is maintained for backwards compatibility with CI/CD systems that haven't migrated to uv yet, but all new development should use uv.
+**CUDA Configuration:** The project is pre-configured for NVIDIA RTX 3090 and similar GPUs with CUDA 12.1 support. PyTorch will automatically install with CUDA acceleration when using the `cuda` extra.
 
 ### Hardware
 
-- **Recommended:** CUDA-capable GPU (e.g., Nvidia RTX 3090) for optimal performance.
-- **Minimum:** Any CPU (runs without GPU support, though slower).
+- **Recommended:** NVIDIA RTX 3090, RTX 4090, or newer CUDA-capable GPU for optimal performance
+- **Supported:** Any NVIDIA GPU with CUDA Compute Capability 7.0+ and CUDA 12.1+ drivers
+- **Minimum:** Any CPU (runs without GPU support, though significantly slower for ML operations)
 
 ## Installation
 
@@ -179,11 +179,25 @@ All dependencies are managed via `pyproject.toml` with optional extras:
    # With development tools
    uv sync --extra dev
    
-   # All extras
+   # All extras (recommended for full development setup)
    uv sync --all-extras
    ```
 
-   **Note:** PyTorch with CUDA support will be automatically installed when using the `cuda` extra. If you need a specific PyTorch version or CUDA configuration, you can override it in your local environment.
+   **PyTorch CUDA Configuration:**
+   - The project automatically installs PyTorch 2.5.1 with CUDA 12.1 support when using `--extra cuda`
+   - Includes all necessary NVIDIA CUDA runtime libraries (cublas, cudnn, etc.)
+   - Pre-configured for RTX 3090 and similar high-end GPUs
+   - Falls back to CPU mode if CUDA is not available
+
+5. **Verify GPU Setup** (if using CUDA):
+
+   ```bash
+   # Check CUDA availability and GPU detection
+   uv run python -c "import torch; print(f'CUDA Available: {torch.cuda.is_available()}'); print(f'GPU Count: {torch.cuda.device_count()}'); [print(f'GPU {i}: {torch.cuda.get_device_name(i)}') for i in range(torch.cuda.device_count())]"
+   
+   # Or use the built-in script
+   uv run python scripts/check_gpu.py
+   ```
 
 ### Migrating from Legacy pip/venv Setup
 

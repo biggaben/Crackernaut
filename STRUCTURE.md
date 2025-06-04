@@ -2,46 +2,35 @@
 
 ## Overview
 
-Crackernaut has been restructured for better organization and maintainability. Below is the new directory structure:
+Crackernaut has been restructured for better organization and maintainability. The project now includes comprehensive PyTorch CUDA support and modern dependency management with uv.
 
-```text
-Crackernaut/
-├── src/                          # Main source code
-│   ├── __init__.py              # Package initialization
-│   ├── cuda_ml.py               # CUDA ML operations
-│   ├── distributed_training.py  # Distributed training support
-│   ├── list_preparer.py         # Data preparation utilities
-│   ├── models/                  # ML model implementations
-│   │   ├── __init__.py
-│   │   ├── embedding/           # Password embedding models
-│   │   │   └── embedding_model.py
-│   │   └── transformer/         # Transformer models
-│   │       ├── transformer_model.py
-│   │       └── transformer_model.pth
-│   └── utils/                   # Utility modules
-│       ├── __init__.py
-│       ├── async_utils.py       # Async I/O utilities
-│       ├── common_utils.py      # Common utility functions
-│       ├── config_utils.py      # Configuration management
-│       ├── performance_utils.py # Performance monitoring
-│       └── variant_utils.py     # Password variant generation
-├── scripts/                     # Setup and utility scripts
-│   ├── check_gpu.py            # GPU status checker
-│   ├── cleanup_old_envs.py     # Environment cleanup
-│   ├── migrate_to_uv.py        # Legacy migration script
-│   ├── setup.ps1               # Windows setup script
-│   └── setup.sh                # Unix setup script
-├── trainingdata/               # Training datasets (not in VCS)
-├── clusters/                   # Processed clustering data
-├── .vscode/                    # VS Code configuration
-├── .github/                    # GitHub configuration
-├── crackernaut.py             # Main application entry point
-├── crackernaut_train.py       # Training script
-├── test_variants.py           # Test suite
-├── config.json               # Application configuration
-├── pyproject.toml           # Project dependencies (uv)
-├── requirements.txt         # Legacy dependencies (deprecated)
-└── README.md               # Project documentation
+## CUDA and GPU Configuration
+
+The project is pre-configured for high-performance GPU acceleration:
+
+- **PyTorch CUDA 12.1**: Optimized for NVIDIA RTX 3090 and similar GPUs
+- **Automatic CUDA Detection**: Falls back to CPU if GPU unavailable
+- **NVIDIA Runtime Libraries**: All required CUDA libraries automatically installed
+- **GPU Memory Management**: Efficient memory usage patterns for large datasets
+
+### CUDA Package Configuration
+
+```toml
+[project.optional-dependencies]
+cuda = [
+    "torch==2.5.1+cu121",
+    "torchvision==0.20.1+cu121", 
+    "torchaudio==2.5.1+cu121",
+]
+
+[tool.uv.sources]
+torch = { index = "pytorch-cuda" }
+torchvision = { index = "pytorch-cuda" }
+torchaudio = { index = "pytorch-cuda" }
+
+[[tool.uv.index]]
+name = "pytorch-cuda"
+url = "https://download.pytorch.org/whl/cu121"
 ```
 
 ## Changes Made

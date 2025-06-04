@@ -80,14 +80,27 @@ analysis = analyzer.evaluate_passwords(password_list, include_variants=True)
 
 - **Python**: 3.8+ with type hints and async/await support
 - **Package Manager**: uv for fast, reliable dependency management
-- **ML Framework**: PyTorch with CUDA GPU acceleration
+- **ML Framework**: PyTorch with CUDA 12.1 GPU acceleration
 - **Key Dependencies**: transformers, scikit-learn, aiofiles, NumPy
 
 ### Hardware Requirements
 
-- **GPU**: CUDA-compatible GPU recommended for training
-- **Memory**: 16GB+ RAM for large dataset processing
+- **GPU**: CUDA 12.1+ compatible GPU (tested on RTX 3090)
+- **CUDA**: CUDA 12.1 or later with compute capability 7.0+
+- **Memory**: 16GB+ RAM for large dataset processing (24GB+ VRAM recommended)
 - **Storage**: SSD recommended for fast I/O operations
+
+### CUDA Setup
+
+The project requires PyTorch with CUDA 12.1 support. Installation is handled automatically via uv:
+
+```bash
+# Install with CUDA support
+uv sync --extra cuda
+
+# Verify CUDA installation
+uv run python -c "import torch; print(f'CUDA Available: {torch.cuda.is_available()}')"
+```
 
 ### Security Considerations
 
@@ -148,10 +161,18 @@ async with BatchProcessor(config) as processor:
 ### GPU Memory Management
 
 ```python
-# Proper CUDA memory handling
+# Proper CUDA memory handling with device detection
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+model = model.to(device)
+
+# Clear cache when needed (important for large models)
 if torch.cuda.is_available():
-    model = model.cuda()
-    torch.cuda.empty_cache()  # Clear cache when needed
+    torch.cuda.empty_cache()
+    
+# Monitor GPU memory usage
+if torch.cuda.is_available():
+    print(f"GPU Memory: {torch.cuda.get_device_properties(0).total_memory / 1e9:.1f}GB")
+    print(f"Memory Allocated: {torch.cuda.memory_allocated() / 1e9:.1f}GB")
 ```
 
 ### Asynchronous I/O
@@ -178,9 +199,18 @@ try:
     variants = agent.generate_variants(password)
 except PasswordValidationError as e:
     logger.error(f"Invalid password input: {e}")
-except GPUMemoryError as e:
+except RuntimeError as e:
+    if "CUDA" in str(e):
+        logger.error(f"CUDA error: {e}")
+        # Fallback to CPU processing
+        device = torch.device("cpu")
+        model = model.to(device)
+    else:
+        logger.error(f"Runtime error: {e}")
+except torch.cuda.OutOfMemoryError as e:
     logger.error(f"GPU memory insufficient: {e}")
-    # Fallback to CPU processing
+    # Clear cache and retry with smaller batch
+    torch.cuda.empty_cache()
 ```
 
 ## Logging and Monitoring
@@ -204,31 +234,67 @@ This tool is designed for legitimate security research and authorized penetratio
 1. **Setup Environment**:
 
 ```bash
-   uv sync  # Install dependencies
+   # Install base dependencies
+   uv sync
+   
+   # Install with CUDA support (recommended)
+   uv sync --extra cuda
+   
+   # Verify CUDA setup
+   uv run python scripts/check_gpu.py
 ```
 
 2. **Configure Models**:
 
 ```bash
    # Edit config.json for your requirements
+   # Ensure gpu_enabled: true for CUDA acceleration
 ```
 
 3. **Prepare Dataset**:
 
 ```bash
-   uv run python list_preparer.py --input raw_passwords.txt
+   uv run python src/list_preparer.py --input-dir trainingdata --output-dir clusters
 ```
 
 4. **Train Model**:
 
 ```bash
-    uv run python crackernaut_train.py --config config.json
+    uv run python crackernaut_train.py --config config.json --epochs 100
 ```
 
 5. **Generate Variants**:
 
 ```bash
-    uv run python crackernaut.py --password "example123" --variants 50
+    uv run python crackernaut.py --password "example123" --config config.json
+```
+
+## Development Workflow
+
+### Available VS Code Tasks
+
+The project includes pre-configured VS Code tasks for common operations:
+
+- **Install Dependencies**: `uv sync` and `uv sync --extra cuda`
+- **Run Crackernaut**: Execute main application with input prompts
+- **Train Model**: Run training pipeline with configurable epochs
+- **Prepare Training Data**: Process raw password datasets
+- **Run Tests**: Execute pytest test suite
+- **Check GPU Status**: Verify CUDA and PyTorch installation
+- **Format Code**: Apply Black formatting with 88-character limit
+- **Lint Code**: Run flake8 with project-specific settings
+
+### CUDA Verification Commands
+
+```bash
+# Check CUDA availability
+uv run python -c "import torch; print(f'CUDA Available: {torch.cuda.is_available()}')"
+
+# Detailed GPU information
+uv run python scripts/check_gpu.py
+
+# Run CUDA test
+uv run python simple_cuda_test.py
 ```
 
 ## Support and Documentation

@@ -82,19 +82,29 @@ powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | ie
 # macOS/Linux:
 curl -LsSf https://astral.sh/uv/install.sh | sh
 
-# Windows with WSL:
-wsl curl -LsSf https://astral.sh/uv/install.sh | sh
-
 # Clone and setup project
 git clone <repository-url>
 cd crackernaut
 
-# Automated migration from old pip setup (if applicable)
-uv run python migrate_to_uv.py
+# Quick setup with automation scripts
+# Windows:
+.\scripts\setup.ps1
 
-# Or manual setup - install all dependencies including CUDA, dev tools, and tests
-uv sync --all-extras
+# macOS/Linux/WSL:
+chmod +x scripts/setup.sh && ./scripts/setup.sh
+
+# Manual setup with full GPU acceleration
+uv sync --extra cuda --extra dev
+
+# Verify PyTorch CUDA installation
+uv run python scripts/check_gpu.py
 ```
+
+**CUDA Configuration Notes:**
+- Project pre-configured for NVIDIA RTX 3090 and similar GPUs
+- Automatically installs PyTorch 2.5.1 with CUDA 12.1 support
+- Includes all necessary NVIDIA runtime libraries
+- Falls back to CPU if CUDA unavailable
 
 ### 3. VS Code Integration
 Open the project in VS Code and:
