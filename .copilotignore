@@ -4,10 +4,10 @@
 # === Performance-Critical Exclusions ===
 # Sensitive training data
 trainingdata/
-*.txt
-!requirements.txt
-!README.txt
-!COPILOT_SETUP.txt
+*.md
+!requirements.md
+!README.md
+!COPILOT_SETUP.md
 
 # Large binary data and model artifacts
 clusters/*.npy
