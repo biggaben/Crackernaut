@@ -4,7 +4,7 @@ import torch
 import logging
 import torch.nn.functional as F
 from typing import Dict, List, Optional, Tuple, Any
-from models.embedding.embedding_model import PasswordEmbedder
+from ..models.embedding.embedding_model import PasswordEmbedder
 
 def get_optimal_workers() -> int:
     """Get optimal number of worker processes based on system resources"""

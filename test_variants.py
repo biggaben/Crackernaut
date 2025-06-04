@@ -7,12 +7,12 @@ from variant_utils import (
     generate_variants
 )
 
-from async_utils import run_preparation
-from config_utils import load_configuration
-from list_preparer import text_to_tensor
-from performance_utils import enable_gradient_checkpointing
-from models.transformer.transformer_model import PasswordTransformer
-from models.embedding.embedding_model import PasswordEmbedder
+from src.utils.async_utils import run_preparation
+from src.utils.config_utils import load_configuration
+from src.list_preparer import text_to_tensor
+from src.utils.performance_utils import enable_gradient_checkpointing
+from src.models.transformer.transformer_model import PasswordTransformer
+from src.models.embedding.embedding_model import PasswordEmbedder
 
 class TestVariantUtils(unittest.TestCase):
     def setUp(self):

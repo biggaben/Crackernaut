@@ -7,10 +7,8 @@ ml_model.pth
 rockyou*
 trainingdata/
 clusters/*
-models/embedding/*
-models/mlp/*
-models/rnn/*
-models/transformer/*
+src/models/embedding/*
+src/models/transformer/*
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
@@ -135,11 +133,18 @@ celerybeat.pid
 # Environments
 .env
 .venv
+.uv-venv
 env/
 venv/
 ENV/
 env.bak/
 venv.bak/
+
+# uv
+.python-version
+
+# Virtual environments
+.uv-cache/
 
 # Spyder project settings
 .spyderproject
@@ -171,3 +176,221 @@ cython_debug/
 #  and can be added to the global gitignore or merged into this file.  For a more nuclear
 #  option (not recommended) you can uncomment the following to ignore the entire idea folder.
 #.idea/
+
+# Security Research Specific
+# Training data - potentially sensitive password datasets
+trainingdata/
+!trainingdata/.gitkeep
+!trainingdata/README.md
+
+# ML model artifacts and checkpoints  
+*.pth
+*.pt
+*.ckpt
+*.onnx
+*.tflite
+*.h5
+*.weights
+*.model
+*.safetensors
+
+# Research outputs and processed data
+clusters/
+!clusters/.gitkeep
+artifacts/
+output/
+results/
+temp/
+cache/
+
+# Performance and profiling data
+*.prof
+*.nvprof
+*.qdrep
+*.trace
+
+# Large files and logs specific to password research
+*.log
+*.hdf5
+*.parquet
+*.feather
+*.bin
+*.tmp
+*.cache
+
+# Jupyter notebook checkpoints (for research notebooks)
+.ipynb_checkpoints
+
+# IDE and editor files
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/extensions.json
+!.vscode/copilot-instructions.md
+
+# Local development environment
+.env
+.venv/
+env/
+venv/
+ENV/
+.uv/
+.uv-venv/
+.uv-cache/
+.python-version
+.copilot/
+.github/
+.vscode/
+.vs/
+
+# UV specific
+uv.log
+.uv-lock
+.uv-cache/
+
+# Security sensitive data - NEVER commit these!
+*.key
+*.pem
+*.crt
+*.cert
+*.password
+*.token
+*.secret
+credentials.json
+secrets.json
+auth_config.json
+
+# Password research data - potentially sensitive!
+trainingdata/*
+!trainingdata/.gitkeep
+!trainingdata/README.md
+wordlists/
+password_lists/
+hashes/
+rainbow_tables/
+breach_data/
+real_passwords/
+
+# ML model artifacts and checkpoints
+models/*/*/*.pth
+models/*/*/*.pt
+models/*/*/*.ckpt
+models/*.bin
+*.pth
+*.pt
+*.ckpt
+*.onnx
+*.tflite
+*.h5
+*.weights
+*.model
+*.safetensors
+*.pb
+checkpoint*/
+
+# Intermediate data processing
+clusters/
+!clusters/.gitkeep
+processed_data/
+embeddings/
+vectors/
+
+# Research outputs
+artifacts/
+output/
+results/
+temp/
+cache/
+logs/
+runs/
+metrics/
+evaluation/
+
+# Performance profiling and GPU data
+*.prof
+*.nvprof
+*.qdrep
+*.nsys-rep
+*.trace
+*.svg
+*.stats
+
+# Development artifacts
+*.swp
+*.bak
+*~
+.DS_Store
+Thumbs.db
+.coverage
+coverage.xml
+htmlcov/
+.hypothesis/
+.pytest_cache/
+nosetests.xml
+.nox/
+.tox/
+.hypothesis/
+.coverage
+.coverage.*
+
+# IDE specific files
+.idea/
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+!.vscode/copilot-instructions.md
+*.code-workspace
+*.sublime-workspace
+*.sublime-project
+
+# Documentation build artifacts
+docs/_build/
+docs/api/
+docs/auto_examples/
+docs/_generated/
+site/
+
+# Editor buffers and backups
+*#
+#*#
+
+# Temporary files
+*.tmp
+*.temp
+*.bak
+*.backup
+*.old
+*.log
+*.out
+
+# Large data files
+*.csv
+*.tsv
+*.parquet
+*.hdf5
+*.h5
+*.feather
+*.arrow
+*.avro
+*.db
+*.sqlite
+*.sqlite3
+*.ldb
+*.zip
+*.gz
+*.tar
+*.tgz
+*.rar
+*.7z
+*.bin
+*.dat
+*.npy
+*.npz
+
+# OS specific
+.DS_Store
+Thumbs.db
+desktop.ini
+*.lnk

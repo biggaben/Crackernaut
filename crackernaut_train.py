@@ -10,18 +10,18 @@ import torch.nn.functional as F
 import torch.nn as nn
 from torch.utils.data import DataLoader
 from torch.optim.lr_scheduler import CosineAnnealingLR
-from models.embedding.embedding_model import PasswordEmbedder
+from src.models.embedding.embedding_model import PasswordEmbedder
 try:
-    from models.transformer.transformer_model import PasswordTransformer
+    from src.models.transformer.transformer_model import PasswordTransformer
 except Exception as e:
     print(f"Import failed: {e}")
     raise
 from typing import List, Tuple, Optional
 from tqdm import tqdm
-from config_utils import load_configuration as load_config_from_utils
-from config_utils import save_configuration as save_config_from_utils
-from variant_utils import generate_variants, optimize_hyperparameters, SYMBOLS
-from cuda_ml import (
+from src.utils.config_utils import load_configuration as load_config_from_utils
+from src.utils.config_utils import save_configuration as save_config_from_utils
+from src.utils.variant_utils import generate_variants, optimize_hyperparameters, SYMBOLS
+from src.cuda_ml import (
     load_ml_model as real_load_model,
     save_ml_model as real_save_model,
     extract_features,
