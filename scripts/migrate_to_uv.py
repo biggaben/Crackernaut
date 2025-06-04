@@ -63,9 +63,9 @@ def install_uv() -> bool:
         ]
     else:
         # macOS/Linux installation
-        cmd = "curl -LsSf https://astral.sh/uv/install.sh | sh"
+        cmd = ["sh", "-c", "curl -LsSf https://astral.sh/uv/install.sh | sh"]
     
-    return run_command(cmd, "Installing uv", shell=True)
+    return run_command(cmd, "Installing uv")
 
 
 def remove_old_venv() -> bool:
