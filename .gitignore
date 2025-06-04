@@ -242,6 +242,8 @@ ENV/
 .github/
 .vscode/
 .vs/
+src/models/*/*
+!src/models/*/*.py
 
 # UV specific
 uv.log
