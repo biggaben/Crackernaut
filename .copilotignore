@@ -1,13 +1,15 @@
 # Crackernaut - Files to exclude from Copilot indexing
 # Following advanced context filtering methodology
+# Updated June 2025 for refactored project structure
 
 # === Performance-Critical Exclusions ===
 # Sensitive training data
 trainingdata/
 *.md
-!requirements.md
 !README.md
-!COPILOT_SETUP.md
+!docs/SETUP.md
+!docs/STRUCTURE.md
+!docs/AGENTS.md
 
 # Large binary data and model artifacts
 clusters/*.npy
@@ -32,6 +34,9 @@ __pycache__/
 *.pyo
 *.pyd
 .Python
+
+# Note: Project now follows enhanced code quality standards with
+# cognitive complexity <15 and modular helper function patterns
 
 # Virtual environments and UV cache
 venv/

@@ -1,0 +1,25 @@
+# Custom Dictionary Words
+aiofiles
+argmin
+bilstm
+crackernaut
+cuda
+CUDA
+docstrings
+Embedder
+embs
+f'CUDA
+kmeans
+levelname
+linalg
+nccl
+nhead
+pbar
+popleft
+preds
+pyproject
+pytest
+scikit
+tqdm
+trainingdata
+wordlist

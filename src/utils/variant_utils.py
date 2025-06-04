@@ -5,19 +5,17 @@ import json
 import torch
 import torch.nn as nn
 import torch.optim as optim
-import torch.nn.functional as F
 
-from typing import List, Set, Dict, Tuple, Callable
+from typing import List, Set, Dict, Tuple, Optional
 from ax.service.ax_client import AxClient, ObjectiveProperties
-from ax.utils.measurement.synthetic_functions import branin
-from config_utils import PROJECT_ROOT as PROJECT_ROOT
+from .config_utils import PROJECT_ROOT
 from collections import deque
-from typing import List
 from concurrent.futures import ProcessPoolExecutor
 from functools import partial
 from .common_utils import extract_features, MLP
 
 SYMBOLS = ["!", "@", "#", "$", "%", "^", "&", "*", "?", "-", "+"]
+CONFIG_FILE = os.path.join(PROJECT_ROOT, "config.json")
 
 ########################################
 # Transformation Components
@@ -93,7 +91,60 @@ TRANSFORMATIONS = {
     "middle_insertion": _chain_middle_insertion
 }
 
-def generate_variants(base: str, max_length: int, chain_depth: int, parallel: bool = False, num_workers: int = None) -> List[str]:
+def _process_transform_chunk(keys, base: str, max_length: int, chain_depth: int):
+    """Process a chunk of transformations for parallel processing."""
+    variants = set()
+    for key in keys:
+        for var in TRANSFORMATIONS[key](base):
+            if len(var) <= max_length:
+                variants.add(var)
+                if chain_depth > 1:
+                    variants.update(_generate_chain_variants(var, max_length, chain_depth - 1))
+    return variants
+
+def _prepare_transform_chunks(transform_keys: list, num_workers: int):
+    """Prepare transformation key chunks for parallel processing."""
+    chunk_size = max(1, len(transform_keys) // num_workers)
+    return [transform_keys[i:i + chunk_size] for i in range(0, len(transform_keys), chunk_size)]
+
+def _generate_parallel_variants(base: str, max_length: int, chain_depth: int, num_workers: Optional[int]) -> List[str]:
+    """Generate variants using parallel processing."""
+    if num_workers is None:
+        cpu_count = os.cpu_count()
+        num_workers = max(1, (cpu_count or 4) - 1)
+    
+    transform_keys = list(TRANSFORMATIONS.keys())
+    chunks = _prepare_transform_chunks(transform_keys, num_workers)
+    
+    all_variants = set([base])
+    with ProcessPoolExecutor(max_workers=num_workers) as executor:
+        process_func = partial(_process_transform_chunk, base=base, max_length=max_length, chain_depth=chain_depth)
+        for result in executor.map(process_func, chunks):
+            all_variants.update(result)
+    return list(all_variants)
+
+def _generate_sequential_variants(base: str, max_length: int, chain_depth: int) -> List[str]:
+    """Generate variants using sequential BFS processing."""
+    variants = set()
+    queue = deque([(base, 0)])  # (variant, depth)
+    seen = {base}
+    
+    while queue:
+        current, depth = queue.popleft()
+        if depth > chain_depth:
+            continue
+        if len(current) <= max_length:
+            variants.add(current)
+        
+        for transform in TRANSFORMATIONS.values():
+            for var in transform(current):
+                if var not in seen and len(var) <= max_length:
+                    seen.add(var)
+                    queue.append((var, depth + 1))
+    
+    return list(variants)
+
+def generate_variants(base: str, max_length: int, chain_depth: int, parallel: bool = False, num_workers: Optional[int] = None) -> List[str]:
     """
     Generate password variants iteratively or in parallel up to a specified chain depth.
 
@@ -108,45 +159,9 @@ def generate_variants(base: str, max_length: int, chain_depth: int, parallel: bo
         List[str]: List of unique variants.
     """
     if parallel:
-        if num_workers is None:
-            num_workers = max(1, os.cpu_count() - 1)
-        
-        def process_transforms(keys):
-            variants = set()
-            for key in keys:
-                for var in TRANSFORMATIONS[key](base):
-                    if len(var) <= max_length:
-                        variants.add(var)
-                        if chain_depth > 1:
-                            variants.update(_generate_chain_variants(var, max_length, chain_depth - 1))
-            return variants
-        
-        transform_keys = list(TRANSFORMATIONS.keys())
-        chunk_size = max(1, len(transform_keys) // num_workers)
-        chunks = [transform_keys[i:i + chunk_size] for i in range(0, len(transform_keys), chunk_size)]
-        
-        all_variants = set([base])
-        with ProcessPoolExecutor(max_workers=num_workers) as executor:
-            for result in executor.map(process_transforms, chunks):
-                all_variants.update(result)
-        return list(all_variants)
-    
+        return _generate_parallel_variants(base, max_length, chain_depth, num_workers)
     else:
-        variants = set()
-        queue = deque([(base, 0)])  # (variant, depth)
-        seen = {base}
-        while queue:
-            current, depth = queue.popleft()
-            if depth > chain_depth:
-                continue
-            if len(current) <= max_length:
-                variants.add(current)
-            for transform in TRANSFORMATIONS.values():
-                for var in transform(current):
-                    if var not in seen and len(var) <= max_length:
-                        seen.add(var)
-                        queue.append((var, depth + 1))
-        return list(variants)
+        return _generate_sequential_variants(base, max_length, chain_depth)
 
 def generate_human_chains(base: str) -> set:
     """
@@ -203,15 +218,10 @@ def load_and_split_data(dataset_path: str = os.path.join(PROJECT_ROOT, "datasets
         bases = [line.strip() for line in f if line.strip()]
     
     if not bases:
-        raise ValueError(f"No valid passwords found in dataset: {dataset_path}")
-    
-    # Load config for variant generation
-    config = load_configuration(CONFIG_FILE)
-    
+        raise ValueError(f"No valid passwords found in dataset: {dataset_path}")    
     data = []
-    for base in bases:
-        # Updated call with config parameter
-        variants = generate_variants(base, 20, 2, config=config)
+    for base in bases:# Generate variants without config parameter
+        variants = generate_variants(base, 20, 2)
         if not variants:
             print(f"Warning: No variants generated for base password '{base}'")
             continue
@@ -281,12 +291,12 @@ def evaluate_model(model, val_data):
         target_tensor = torch.tensor(list(target.values()), dtype=torch.float32, device=device)
         targets.append(target_tensor)
     
-    X_val = torch.cat(features, dim=0)
+    x_val = torch.cat(features, dim=0)
     y_val = torch.stack(targets, dim=0)
     
     model.eval()  # Ensure evaluation mode
     with torch.no_grad():
-        outputs = model(X_val)
+        outputs = model(x_val)
         loss = loss_fn(outputs, y_val)
     
     return loss.item()
@@ -357,11 +367,14 @@ def optimize_hyperparameters(dataset_path: str) -> dict:
             except Exception as e:
                 print(f"Trial failed: {e}")
                 ax_client.complete_trial(trial_index=trial_index, raw_data={"validation_loss": float('inf')})
-        
-        # 3. Get and verify best parameters
+          # 3. Get and verify best parameters
         best_parameters = ax_client.get_best_parameters()
-        print(f"\nOptimization complete. Best parameters found: {json.dumps(best_parameters[0], indent=2)}")
-        return best_parameters[0]
+        if best_parameters and len(best_parameters) > 0 and best_parameters[0] is not None:
+            print(f"\nOptimization complete. Best parameters found: {json.dumps(best_parameters[0], indent=2)}")
+            return best_parameters[0]
+        else:
+            print("\nOptimization complete but no valid parameters found. Using default values.")
+            return {"hidden_dim": 128, "dropout": 0.3}
         
     except Exception as e:
         print(f"\nFatal error in optimization: {e}")
@@ -455,15 +468,13 @@ def extract_pattern_clusters(passwords: List[str], min_cluster_size: int = 3) ->
     # Return only patterns with sufficient examples
     return {k: v for k, v in pattern_map.items() if len(v) >= min_cluster_size}
 
-def mine_year_patterns(passwords: List[str]) -> List[Tuple[str, str]]:
-    """Extract high-confidence training pairs from year patterns."""
+def _extract_year_patterns(passwords: List[str]) -> dict:
+    """Extract year patterns from passwords and group by base."""
     from collections import defaultdict
     
-    # Find passwords ending with 4 digits (likely years)
     year_pattern = re.compile(r'^(.+?)(\d{4})$')
-    
-    # Group by base part
     password_map = defaultdict(list)
+    
     for password in passwords:
         match = year_pattern.match(password)
         if match:
@@ -471,8 +482,12 @@ def mine_year_patterns(passwords: List[str]) -> List[Tuple[str, str]]:
             if len(year) == 4 and 1900 <= int(year) <= 2030:  # Validate as plausible year
                 password_map[base].append(year)
     
-    # Find bases with multiple years (strong indicator of variants)
+    return password_map
+
+def _create_training_pairs(password_map: dict) -> List[Tuple[str, str]]:
+    """Create training pairs from password variants with multiple years."""
     training_pairs = []
+    
     for base, years in password_map.items():
         if len(years) >= 2:
             # Create pairs from each year variant
@@ -482,6 +497,11 @@ def mine_year_patterns(passwords: List[str]) -> List[Tuple[str, str]]:
                     training_pairs.append((pw1, pw2))
     
     return training_pairs
+
+def mine_year_patterns(passwords: List[str]) -> List[Tuple[str, str]]:
+    """Extract high-confidence training pairs from year patterns."""
+    password_map = _extract_year_patterns(passwords)
+    return _create_training_pairs(password_map)
 
 def mine_incremental_patterns(passwords: List[str]) -> List[Tuple[str, str]]:
     """Find passwords with incremental number patterns."""

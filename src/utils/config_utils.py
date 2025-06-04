@@ -5,7 +5,8 @@ import logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger('config_utils')
 
-PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
+# Get the project root directory (two levels up from src/utils/)
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 CONFIG_FILE = os.path.join(PROJECT_ROOT, "config.json")
 DEFAULT_CONFIG = {
     "modification_weights": {

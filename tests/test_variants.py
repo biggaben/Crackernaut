@@ -1,8 +1,13 @@
 # test_variants.py
-import unittest
+import sys
 import os
+import unittest
+
+# Add the parent directory to the Python path so we can import from src
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 import torch
-from variant_utils import (
+from src.utils.variant_utils import (
     chain_shift_variants, 
     generate_variants
 )
@@ -16,7 +21,10 @@ from src.models.embedding.embedding_model import PasswordEmbedder
 
 class TestVariantUtils(unittest.TestCase):
     def setUp(self):
-        self.config = load_configuration("config.json")
+        # Use relative path from test directory to project root
+        project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        config_path = os.path.join(project_root, "config.json")
+        self.config = load_configuration(config_path)
 
     def test_shift_variants(self):
         self.assertIn("123abc", chain_shift_variants("abc123"))
@@ -64,26 +72,42 @@ class TestListPreparer(unittest.TestCase):
     def test_run_preparation(self):
         # Assuming run_preparation is an async function
         import asyncio
-        dataset_path = "C:/Users/David/Proton Drive/david.holmertz93/My files/Code/Crackernaut/trainingdata/rockyou-75.txt"
-        output_dir = "clusters"
+        
+        # Use relative paths and check if test data exists
+        project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        dataset_path = os.path.join(project_root, "trainingdata", "rockyou-75.txt")
+        output_dir = os.path.join(project_root, "clusters")
         chunk_size = 1000000
+        
+        # Skip test if training data doesn't exist (common in CI/development)
+        if not os.path.exists(dataset_path):
+            self.skipTest(f"Training data not found: {dataset_path}")
+        
+        # Create output directory if it doesn't exist
+        os.makedirs(output_dir, exist_ok=True)
         
         # Run the preparation with dynamic n_clusters
         asyncio.run(run_preparation(dataset_path, output=output_dir, chunk_size=chunk_size))
         # Add assertions to verify the output
         # Example assertion: Check if the output directory contains the expected files
         self.assertGreater(len(os.listdir(output_dir)), 0)
-        
+
 
 class TestConfigUtils(unittest.TestCase):
     def test_load_configuration(self):
-        config = load_configuration("config.json")
+        # Use relative path from test directory to project root
+        project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        config_path = os.path.join(project_root, "config.json")
+        config = load_configuration(config_path)
         self.assertIn("model_type", config)
         self.assertIn("model_embed_dim", config)
         self.assertIn("lp_chunk_size", config)
 
     def test_config_values(self):
-        config = load_configuration("config.json")
+        # Use relative path from test directory to project root
+        project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        config_path = os.path.join(project_root, "config.json")
+        config = load_configuration(config_path)
         self.assertIsInstance(config["model_embed_dim"], int)
         self.assertGreater(config["lp_chunk_size"], 0)
         self.assertIn("model_type", config)

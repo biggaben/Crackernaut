@@ -3,7 +3,7 @@ import asyncio
 import aiofiles
 import os
 import logging
-from typing import List, Optional, Set, Dict, Any
+from typing import List, Optional, Dict, Any
 
 async def async_load_passwords(
     wordlist_path: str, 
@@ -95,7 +95,7 @@ async def async_save_results(
 async def async_process_directory(
     directory_path: str,
     pattern: str = "*.txt",
-    processor_func: callable = None,
+    processor_func = None,
     **kwargs
 ) -> Dict[str, Any]:
     """
@@ -171,14 +171,11 @@ async def run_preparation(dataset_path: str, output: str, chunk_size: int = 1000
         # Format output filename with leading zeros for proper sorting
         chunk_file = os.path.join(output, f"chunk_{i+1:04d}.txt")
         
-        # Save chunk with empty scores (just the passwords)
-        await async_save_results([(pw, "") for pw in chunk], chunk_file)
+        # Save chunk with empty scores (just the passwords)        await async_save_results([(pw, "") for pw in chunk], chunk_file)
         
         logging.info(f"Saved chunk {i+1}/{total_chunks} ({len(chunk)} passwords) to {chunk_file}")
     
     logging.info(f"Dataset preparation complete: {total_chunks} chunks saved to {output}")
-
-from typing import List
 
 def load_passwords(wordlist_path: str, max_count: int = 100000) -> List[str]:
     """Load passwords from a wordlist file with limit."""

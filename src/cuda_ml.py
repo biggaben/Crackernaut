@@ -9,13 +9,12 @@ This module implements a CUDA-accelerated machine learning component using PyTor
 # For transformer-based scoring, refer to transformer_model.py.
 
 import os
-import re
 import torch
 import torch.nn as nn
 import torch.optim as optim
 import torch.nn.functional as F
-from typing import List, Tuple
-from variant_utils import (
+from typing import List, Tuple, Optional
+from .utils.variant_utils import (
     password_similarity, 
     extract_pattern_clusters, 
     mine_incremental_patterns, 
@@ -94,7 +93,7 @@ def create_parallel_model(model, min_dataset_size=10000):
     else:
         return model.cuda()
 
-def load_passwords(file_path: str, max_count: int = None) -> List[str]:
+def load_passwords(file_path: str, max_count: Optional[int] = None) -> List[str]:
     """
     Load passwords from a file.
     
@@ -137,20 +136,17 @@ def load_ml_model(config=None, model_type="bilstm"):
     if model_type.lower() == "bilstm":
         model = PasswordBiLSTM(
             vocab_size=vocab_size,
-            embed_dim=embed_dim,
+            embedding_dim=embed_dim,
             hidden_dim=hidden_dim,
-            output_dim=output_dim,
-            num_layers=num_layers,
-            dropout=dropout
+            output_dim=output_dim
         ).to(device)
     elif model_type.lower() == "rnn":
         model = PasswordRNN(
-            vocab_size=vocab_size,
             embed_dim=embed_dim,
             hidden_dim=hidden_dim,
-            output_dim=output_dim,
             num_layers=num_layers,
-            dropout=dropout
+            dropout=dropout,
+            output_dim=output_dim
         ).to(device)
     else:  # Fallback to MLP
         input_dim = config.get("model_input_dim", 8) if config else 8
@@ -290,7 +286,7 @@ def train_self_supervised(model, training_pairs, epochs=5, batch_size=64, lr=0.0
     Returns:
         nn.Module: Trained model.
     """
-    optimizer = optim.Adam(model.parameters(), lr=lr)
+    optimizer = optim.Adam(model.parameters(), lr=lr, weight_decay=1e-5)
     loss_fn = nn.MSELoss()
     device = next(model.parameters()).device
     

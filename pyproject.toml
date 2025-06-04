@@ -39,6 +39,9 @@ dependencies = [
     "aiofiles>=22.1.0",
     "scikit-learn>=1.3.0",
     "ax-platform>=0.3.0",
+    "torch>=2.5.1",
+    "torchvision>=0.20.1",
+    "torchaudio>=2.5.1",
 ]
 
 [project.optional-dependencies]

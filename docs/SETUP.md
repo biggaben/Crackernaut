@@ -67,9 +67,7 @@ Repository Level (.github/):
 ```
 
 #### Context Optimization Logic
-
 The configuration implements surgical precision filtering:
-
 - **Security Protection**: Excludes sensitive password training data
 - **Performance Impact**: Removes large model checkpoints and cluster data
 - **Relevance Filtering**: Maintains focus on custom code while excluding third-party artifacts
@@ -78,9 +76,7 @@ The configuration implements surgical precision filtering:
 ## Quick Start with UV
 
 ### 1. Prerequisites
-
 - **uv** (modern Python package manager - replaces pip/venv)
-- 
 - **Python 3.8+**
 - **CUDA** (optional, for GPU acceleration)
 
@@ -119,9 +115,7 @@ uv run python scripts/check_gpu.py
 - Falls back to CPU if CUDA unavailable
 
 ### 3. VS Code Integration
-
 Open the project in VS Code and:
-
 1. **Install recommended extensions** (prompted automatically)
 2. **Use integrated tasks** via Command Palette (`Ctrl+Shift+P`):
    - `Tasks: Run Task` → `Install Dependencies`
@@ -169,7 +163,6 @@ uv run python -c "import torch; print(f'CUDA: {torch.cuda.is_available()}')"
 ## Configuration Features
 
 ### 1. Repository-Level Instructions (`.github/copilot-instructions.md`)
-
 - **Automatically Applied**: To all Copilot conversations in this repository
 - **Project Context**: Password security research, ML models, cybersecurity
 - **Technology Stack**: PyTorch, CUDA, transformers, async processing
@@ -177,7 +170,6 @@ uv run python -c "import torch; print(f'CUDA: {torch.cuda.is_available()}')"
 - **Performance Patterns**: GPU optimization, memory management
 
 ### 2. Workspace-Level Settings (`.vscode/settings.json`)
-
 - **Agent Mode**: Enabled for Sonnet 4 optimization
 - **Custom Instructions**: File-based and inline instructions
 - **Context Enhancement**: Codebase awareness, temporal context, multi-turn conversations
@@ -185,13 +177,11 @@ uv run python -c "import torch; print(f'CUDA: {torch.cuda.is_available()}')"
 - **Performance**: Excludes large training data from indexing
 
 ### 3. Advanced Prompt File (`.github/copilot-chat.md`)
-
 - **System Role**: Expert AI assistant for security research
 - **Domain Expertise**: Password security, ML, cybersecurity
 - **Response Guidelines**: Security-first, performance-oriented suggestions
 
 ### 4. Privacy Protection (`.copilotignore`)
-
 - **Sensitive Data**: Excludes password training data from Copilot indexing
 - **Performance**: Excludes large binary files and temporary data
 - **Security**: Protects environment variables and credentials
@@ -199,13 +189,11 @@ uv run python -c "import torch; print(f'CUDA: {torch.cuda.is_available()}')"
 ## Key Settings Enabled
 
 ### Advanced 2025 Copilot Features
-
 - `github.copilot.advanced.debug.temporalContext`: true
 - `github.copilot.advanced.debug.nextEditSuggestions`: true  
 - `github.copilot.advanced.debug.agentMode`: true
 
 ### Enhanced Chat Capabilities
-
 - `github.copilot.chat.useInstructionFiles`: true
 - `github.copilot.chat.experimental.usePromptFiles`: true
 - `github.copilot.chat.experimental.agent.enabled`: true
@@ -214,14 +202,12 @@ uv run python -c "import torch; print(f'CUDA: {torch.cuda.is_available()}')"
 - `github.copilot.chat.experimental.multiTurn.enabled`: true
 
 ### Code Generation Instructions
-
 - File-based instructions from `.github/copilot-instructions.md`
 - Inline security and performance guidelines
 - ML-specific error handling patterns
 - Async I/O best practices
 
 ### Python Development
-
 - Pylance language server with type checking
 - Black formatter with 88-character line limit
 - Flake8 linting with project-specific rules
@@ -230,9 +216,7 @@ uv run python -c "import torch; print(f'CUDA: {torch.cuda.is_available()}')"
 ## Usage Instructions
 
 ### 1. Verify Setup
-
 Open VS Code and check:
-
 - **Copilot Settings**: Go to Settings → Extensions → GitHub Copilot
 - **Instruction Files**: Verify "Use Instruction Files" is enabled
 - **Repository Context**: Confirm Copilot recognizes the project type

@@ -7,6 +7,7 @@ import os
 from sklearn.cluster import MiniBatchKMeans
 from tqdm import tqdm
 from pathlib import Path
+from models.transformer.transformer_model import PasswordTransformer
 
 # Step 1: Load passwords from a file with progress
 async def load_password_chunks(file_path: str, chunk_size=1000000, total_lines=None):

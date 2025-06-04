@@ -3,14 +3,11 @@ import argparse
 import logging
 import torch
 import os
-import sys
 
-from src.utils.config_utils import load_configuration, save_configuration
+from src.utils.config_utils import load_configuration
 from src.utils.variant_utils import generate_variants
-# from src.utils.performance_utils import measure_processing_time
-from src.list_preparer import prepare_list
 from src.models.transformer.transformer_model import PasswordTransformer
-from src.cuda_ml import load_ml_model
+from src.cuda_ml import load_ml_model, text_to_tensor
 
 
 CONFIG_FILE = "config.json"
@@ -76,7 +73,7 @@ def main():
         logger.error("Failed to load model.")
         exit(1)
 
-    variants = generate_variants(base_pw, config["max_length"], config["chain_depth"], config=config)
+    variants = generate_variants(args.password, config["max_length"], config["chain_depth"])
     for variant in variants:
         print(variant)
 

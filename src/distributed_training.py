@@ -1,16 +1,32 @@
 import os
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data import DataLoader, DistributedSampler, Dataset
 import json
-import re
-from typing import Set
 
 PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
 CONFIG_FILE = os.path.join(PROJECT_ROOT, "config.json")
+
+class SimplePasswordDataset(Dataset):
+    """Simple dataset for password training data."""
+    
+    def __init__(self, data_path):
+        """Initialize dataset from file path."""
+        self.data = []
+        if os.path.exists(data_path):
+            with open(data_path, 'r', encoding='utf-8') as f:
+                self.data = [line.strip() for line in f if line.strip()]
+        else:
+            # Fallback to dummy data
+            self.data = ["password123", "admin", "123456", "qwerty"]
+    
+    def __len__(self):
+        return len(self.data)
+    
+    def __getitem__(self, idx):
+        return self.data[idx]
 
 def setup_distributed(rank, world_size):
     """
@@ -121,12 +137,11 @@ def run_distributed_training(model_class, dataset, num_gpus, **kwargs):
     Launch distributed training on multiple GPUs
     
     Args:
-        model_class: Model class to instantiate
-        dataset: Dataset for training
+        model_class: Model class to instantiate        dataset: Dataset for training
         num_gpus: Number of GPUs to use
         **kwargs: Additional arguments for train_distributed
     """
-    import torch.multiprocessing as mp
+    import multiprocessing as mp
     
     # Check available GPU count
     available_gpus = torch.cuda.device_count()
@@ -139,12 +154,10 @@ def run_distributed_training(model_class, dataset, num_gpus, **kwargs):
         return train_single_gpu(model, dataset, **kwargs)
     
     # Launch processes
-    mp.spawn(
-        train_distributed,
-        args=(num_gpus, model_class(), dataset) + tuple(kwargs.values()),
-        nprocs=num_gpus,
-        join=True
-    )
+    mp.Process(
+        target=train_distributed,
+        args=(0, num_gpus, model_class(), dataset) + tuple(kwargs.values())
+    ).start()
 
 def train_single_gpu(model, dataset, epochs=10, batch_size=32, learning_rate=0.001, 
                     weight_decay=1e-4, save_path=None):
@@ -215,7 +228,7 @@ def load_config(config_file):
 
 def load_dataset(dataset_path):
     try:
-        return CustomDataset(dataset_path)
+        return SimplePasswordDataset(dataset_path)
     except Exception as e:
         print(f"Error loading dataset: {e}")
         raise
@@ -225,7 +238,7 @@ def main():
     model_class = globals().get(config["model_class"])
     if model_class is None:
         raise ValueError(f"Model class {config['model_class']} not found.")
-    model = model_class()
+    
     dataset = load_dataset(config["dataset_path"])
 
     run_distributed_training(

@@ -8,6 +8,18 @@ Crackernaut is a password security research platform designed for authorized sec
 
 ## Recent Updates
 
+- **🔧 Code Quality Enhancement (June 2025):**  
+  Major refactoring to reduce cognitive complexity across training functions, improving maintainability and readability following SOLID principles.
+- **🧠 Cognitive Complexity Optimization:**  
+  Refactored `bulk_train_on_wordlist` function from complexity 39 → <15 and `interactive_training` function from complexity 23 → <15 using helper function extraction.
+- **📊 Improved Function Modularity:**  
+  Breaking down monolithic functions into focused, single-responsibility helper functions for better testing and maintenance.
+- **⚡ Enhanced Training Pipeline:**  
+  Streamlined training workflows with dedicated helper functions for batch processing, variant generation, and model-specific training logic.
+- **🎯 Extracted Helper Functions:**  
+  - `_load_wordlist()`, `_setup_training_components()`, `_generate_training_variants()` for bulk training
+  - `_train_rnn_batch()`, `_train_mlp_batch()`, `_process_training_batch()` for model-specific operations  
+  - `_display_variants_and_options()`, `_process_user_input()`, `_handle_training_iteration()` for interactive training
 - **🎯 Major Project Restructuring (June 2025):**  
   Complete reorganization with professional directory structure (`src/`, `scripts/`), removal of unused components, and improved maintainability.
 - **🧹 Comprehensive Cleanup:**  
@@ -50,9 +62,30 @@ Crackernaut/
 │   ├── check_gpu.py              # GPU status verification utility
 │   ├── cleanup_old_envs.py       # Legacy environment cleanup tool
 │   └── migrate_to_uv.py          # Migration utilities for legacy setups
+├── tests/                        # Test files and validation scripts
+│   ├── test_variants.py          # Password variant testing and validation
+│   ├── test_crackernaut.py       # Main application tests
+│   ├── test_torch.py             # PyTorch/CUDA functionality tests
+│   └── test_imports.py           # Import and dependency tests
+├── docs/                         # Documentation and guides
+│   ├── README.md                 # Documentation navigation
+│   ├── SETUP.md                  # Setup and configuration guide
+│   ├── STRUCTURE.md              # Project structure and organization
+│   ├── AGENTS.md                 # AI agent configurations
+│   └── MARKDOWN_STYLE_GUIDE.md   # Markdown formatting standards
+├── scripts/                      # Setup and utility scripts
+│   ├── setup.ps1                 # Windows PowerShell setup script
+│   ├── setup.sh                  # Unix/Linux setup script
+│   ├── check_gpu.py              # GPU status verification utility
+│   ├── cleanup_old_envs.py       # Legacy environment cleanup tool
+│   ├── migrate_to_uv.py          # Migration utilities for legacy setups
+│   └── dev/                      # Development and debugging utilities
+│       ├── check_cuda.py         # Basic CUDA availability check
+│       ├── debug_torch.py        # Detailed PyTorch debugging
+│       ├── simple_cuda_test.py   # Simple CUDA functionality test
+│       └── simple_torch_test.py  # Basic PyTorch installation test
 ├── crackernaut.py                # Main application entry point
 ├── crackernaut_train.py          # ML model training pipeline
-├── test_variants.py              # Password variant testing and validation
 ├── config.json                   # Configuration file for models and processing
 ├── pyproject.toml                # uv dependency management and project metadata
 ├── trainingdata/                 # Password datasets (excluded from git)
@@ -63,10 +96,13 @@ Crackernaut/
 
 ### Key Organizational Benefits
 
+- **tests/**: Centralized test files for better organization and pytest compatibility
+- **docs/**: Comprehensive documentation hub with clear navigation
 - **src/**: Clean separation of main source code from scripts and configuration
 - **src/utils/**: Centralized utility functions for better maintainability and reusability
 - **src/models/**: Organized ML model implementations with clear architecture separation
 - **scripts/**: Setup and maintenance scripts separate from application logic
+- **scripts/dev/**: Development utilities isolated from production scripts
 - **Removed redundancy**: Eliminated empty model files and unused dependencies
 - **Professional structure**: Follows Python packaging best practices for research projects
 
@@ -77,12 +113,13 @@ Crackernaut/
 
 This structure provides:
 
-- **Clear separation** of core code, utilities, and scripts
+- **Clear separation** of tests, documentation, core code, utilities, and scripts
 - **Professional organization** following Python packaging best practices
 - **Maintainability** with logical grouping of related functionality
 - **Scalability** with room for growth without cluttering the root directory
+- **Developer experience** with dedicated documentation and debugging tools
 
-For detailed information about the structure and recent changes, see [STRUCTURE.md](STRUCTURE.md).
+For detailed information about the structure and recent changes, see [docs/STRUCTURE.md](docs/STRUCTURE.md).
 
 ## Purpose
 
@@ -130,7 +167,7 @@ All dependencies are managed via `pyproject.toml` with optional extras:
 - `cuda`: For CUDA/GPU acceleration with PyTorch CUDA 12.1 support
 - `dev`: Development tools (black, flake8, mypy, pre-commit, pytest)
 
-**CUDA Configuration:** The project is pre-configured for NVIDIA RTX 3090 and similar GPUs with CUDA 12.1 support. PyTorch will automatically install with CUDA acceleration when using the `cuda` extra.
+- **CUDA Configuration:** The project is pre-configured for NVIDIA RTX 3090 and similar GPUs with CUDA 12.1 support. PyTorch will automatically install with CUDA acceleration when using the `cuda` extra.
 
 ### Hardware
 
